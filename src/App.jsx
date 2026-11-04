@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { createOffice, statusText, W, H, PODS } from './office';
 import { AGENTS, DEPTS, makeAvatar } from './sprites';
-import { STRATEGIES } from './strategy/sTier';
+import { STRATEGIES, ALL_STRATEGIES } from './strategy/sTier';
+import { LOGO_SVG } from './logo';
+import { EXIT_PROFILES } from './strategy/candidates';
 import { fmtTok, fmtUsd } from './tokens';
 import { clockText, usd, pct } from './format';
 
@@ -16,7 +18,7 @@ const DOWN = '#4d9bff';
 const tone = (n) => (n > 0 ? UP : n < 0 ? DOWN : '#b8bbc1');
 const MAX_WATCH = 20;
 const MAX_AI = 15;
-const EMPTY_MSG = '현재 관심 종목이 없습니다. 종목을 추가해주세요.';
+const EMPTY_MSG = '관심 종목 없음 · 종목 추가 필요';
 const ACTION_LABEL = { HOLD: '보유', TRIM: '부분 익절', EXIT_STOP: '손절', EXIT_TAKE: '익절' };
 const levelOf = (j) => (j.action !== 'HOLD' ? 'exit' : j.pressure >= 2 ? 'watch' : 'calm');
 
@@ -52,7 +54,7 @@ async function api(path, { method = 'GET', body, ms = 8000, retried = false } = 
     if (tok) headers['x-api-token'] = tok;
     const r = await fetch(KIS_API + path, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: ac.signal });
     if (r.status === 401 && !retried) {
-      const v = window.prompt('봇 서버 접근 토큰(LOCAL_API_TOKEN)을 입력하세요. 이 브라우저에만 저장됩니다.');
+      const v = window.prompt('봇 서버 접근 토큰(LOCAL_API_TOKEN) 입력 · 이 브라우저에만 저장');
       if (v) {
         try {
           localStorage.setItem(TOKEN_KEY, v.trim());
@@ -154,6 +156,24 @@ export default function App() {
   const [openAgent, setOpenAgent] = useState(null);
   const [ticker, setTicker] = useState('');
   const [wlTab, setWlTab] = useState('manual');
+  const savedUi = (k, d) => {
+    try {
+      return localStorage.getItem(k) ?? d;
+    } catch {
+      return d;
+    }
+  };
+  const [rightTab, setRightTab0] = useState(() => savedUi('qo-right-tab', 'trade'));
+  const [officeOpen, setOfficeOpen0] = useState(() => savedUi('qo-office-open', '1') === '1');
+  const keepUi = (k, v) => {
+    try {
+      localStorage.setItem(k, v);
+    } catch {
+      /* 저장 불가 브라우저 */
+    }
+  };
+  const setRightTab = (v) => (setRightTab0(v), keepUi('qo-right-tab', v));
+  const setOfficeOpen = (v) => (setOfficeOpen0(v), keepUi('qo-office-open', v ? '1' : '0'));
   const [wlMsg, setWlMsg] = useState(null);
   const [wlBusy, setWlBusy] = useState(false);
   const [stats, setStats] = useState(null);
@@ -295,11 +315,11 @@ export default function App() {
 
   const addSymbol = async (raw) => {
     const sym = String(raw || '').trim().toUpperCase();
-    if (!/^[A-Z][A-Z.\-]{0,9}$/.test(sym)) return say('영문 티커를 입력하세요. 예: META, BRK.B', 'err'), false;
+    if (!/^[A-Z][A-Z.\-]{0,9}$/.test(sym)) return say('영문 티커 입력 (예: META, BRK.B)', 'err'), false;
     setWlBusy(true);
     try {
       const d = await api('/api/watchlist/manual', { method: 'POST', body: { code: sym } });
-      say(d.added === false ? `${sym}: 이미 관심 종목에 있어요.` : `${sym} 추가됨 (${d.resolved.exchange}, $${d.resolved.last})`, d.added === false ? 'info' : 'ok');
+      say(d.added === false ? `${sym}: 이미 관심 종목에 있음` : `${sym} 추가됨 (${d.resolved.exchange}, $${d.resolved.last})`, d.added === false ? 'info' : 'ok');
       refresh();
       return true;
     } catch (e) {
@@ -319,8 +339,8 @@ export default function App() {
     }
   };
   const removeSymbol = (code) => listAction('DELETE', `/api/watchlist/manual/${code}`, `${code} 삭제됨`);
-  const promoteSymbol = (code) => listAction('POST', `/api/watchlist/ai/${code}/promote`, `${code}: 수동 관심종목으로 옮겼어요.`);
-  const dropAi = (code) => listAction('DELETE', `/api/watchlist/ai/${code}`, `${code}: AI 관심종목에서 삭제했어요.`);
+  const promoteSymbol = (code) => listAction('POST', `/api/watchlist/ai/${code}/promote`, `${code}: 수동 관심종목으로 이동`);
+  const dropAi = (code) => listAction('DELETE', `/api/watchlist/ai/${code}`, `${code}: AI 관심종목에서 삭제`);
   const userOrder = async ({ code, side, qty }) => {
     try {
       const r = await api('/api/bot/order', { method: 'POST', body: { symbol: code, side: side === '매수' ? 'buy' : 'sell', qty }, ms: 20000 });
@@ -349,15 +369,15 @@ export default function App() {
     stockCost += p.qty * p.avg;
   }
   const stockPnl = stockValue - stockCost;
-  const sel = m.tickers.find((x) => x.code === ticker) || m.tickers.find((x) => x.list !== 'ai') || m.tickers[0] || null;
-  const manualList = m.tickers.filter((x) => x.list !== 'ai' && x.list !== 'gap');
+  const sel = m.tickers.find((x) => x.code === ticker && x.list !== 'shadow') || m.tickers.find((x) => x.list !== 'ai' && x.list !== 'shadow') || m.tickers[0] || null;
+  const manualList = m.tickers.filter((x) => x.list !== 'ai' && x.list !== 'gap' && x.list !== 'shadow');
   const aiList = m.tickers.filter((x) => x.list === 'ai');
   const gapList = m.tickers.filter((x) => x.list === 'gap' || st?.gap?.today && (st.gap.items || []).some((g) => g.symbol === x.code));
   const shownList = wlTab === 'ai' ? aiList : wlTab === 'gap' ? gapList : manualList;
   const runGapScan = async () => {
     try {
       await api('/api/bot/gapscan', { method: 'POST', ms: 60000 });
-      say('갭 스캔을 한 번 돌렸어요.', 'ok');
+      say('갭 스캔 완료', 'ok');
       refresh();
     } catch (e) {
       say(e.message, 'err');
@@ -370,7 +390,7 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <img src={avatars.kang} alt="" className="brand-icon" />
+          <img src={LOGO_SVG} alt="퀀트 오피스 로고" className="brand-icon" />
           <div>
             <h1>퀀트 오피스</h1>
             <p>KIS 실데이터로만 움직이는 8인 에이전트 매매 데스크</p>
@@ -398,15 +418,30 @@ export default function App() {
 
       <Scheduler mode={mode} clock={clock.min} weekend={closedDay} officeRef={officeRef} onPick={setOpenAgent} />
 
+      <StatusStrip st={st} m={m} conn={conn} working={working} onArk={() => setOpenAgent('na')} />
+
       <main className="left">
-        <OfficePanel officeRef={officeRef} bubbles={bubbles} setBubbles={setBubbles} onPick={setOpenAgent} market={m} mode={mode} control={control} emergency={st?.emergency} offline={conn !== 'online'} shutdown={st?.guard?.shutdown ? st.guard.reason : null} />
-        <Messenger messages={messages} avatars={avatars} onPick={setOpenAgent} offline={conn !== 'online'} />
-        <NewsFeed live={conn === 'online'} mine={m.tickers.map((t) => t.code)} onSelect={setTicker} />
-        <TokenMonitor live={conn === 'online'} llm={st?.llm} onPick={setOpenAgent} avatars={avatars} />
+        <div className="office-fold">
+          <button type="button" className="fold-btn" onClick={() => setOfficeOpen(!officeOpen)} aria-expanded={officeOpen}>{officeOpen ? '▲ 오피스 화면 접기' : '▼ 오피스 화면 펼치기'}</button>
+          <div style={{ display: officeOpen ? undefined : 'none' }}>
+            <OfficePanel officeRef={officeRef} bubbles={bubbles} setBubbles={setBubbles} onPick={setOpenAgent} market={m} mode={mode} control={control} emergency={st?.emergency} offline={conn !== 'online'} shutdown={st?.guard?.shutdown ? st.guard.reason : null} />
+          </div>
+        </div>
+        <ChartPanel sel={sel} live={conn === 'online'} />
+        <div className="feed-pair">
+          <Messenger messages={messages} avatars={avatars} onPick={setOpenAgent} offline={conn !== 'online'} />
+          <NewsFeed live={conn === 'online'} mine={m.tickers.map((t) => t.code)} onSelect={setTicker} />
+        </div>
       </main>
 
       <aside className="right">
         {conn !== 'online' && <OfflineCard conn={conn} />}
+        <div className="right-tabs" role="tablist" aria-label="오른쪽 패널">
+          {[['trade', '매매'], ['perf', '성과'], ['shadow', '가상'], ['config', '설정']].map(([k, l]) => (
+            <button key={k} type="button" role="tab" aria-selected={rightTab === k} className={rightTab === k ? 'on' : ''} onClick={() => setRightTab(k)}>{l}</button>
+          ))}
+        </div>
+        <div className="tab-pane" style={{ display: rightTab === 'config' ? undefined : 'none' }}>
         {conn === 'online' &&
           (control === 'manual' ? (
             <OverridePanel applied={st.settings.rules} onApply={applyRules} onLiquidate={requestLiquidate} mode={mode} hasPos={Object.keys(m.pf.pos).length > 0} market={m} onOrder={userOrder} />
@@ -415,18 +450,21 @@ export default function App() {
               <span className="lock" aria-hidden="true">🔒</span>
               <span>
                 <b>전략 & 오버라이드 패널 잠김</b>
-                <small>봇이 AI 자동 모드로 운용 중입니다. 눌러서 사용자 수동 제어로 바꾸면 패널이 열립니다. 강제 손절선(-{st.settings.rules.hardStopPct}%)은 어느 모드에서나 서버가 집행합니다.</small>
+                <small>AI 자동 모드 운용 중 · 누르면 수동 제어로 전환 · 강제 손절선 -{st.settings.rules.hardStopPct}%는 항상 서버가 집행</small>
               </span>
             </button>
           ))}
+        <TokenMonitor live={conn === 'online'} llm={st?.llm} onPick={setOpenAgent} avatars={avatars} />
+        </div>
 
+        <div className="tab-pane" style={{ display: rightTab === 'trade' ? undefined : 'none' }}>
         <section className="win">
           <h2 className="win-title">포트폴리오 {acct && <span className="src src-kis">KIS 실계좌{acct.env === 'demo' ? ' (모의투자)' : ''}</span>}</h2>
           {!acct ? (
             <div className="acct-down" role="alert">
-              <b>{conn !== 'online' ? '봇 서버에 연결되지 않아 계좌를 표시할 수 없어요' : st.accountError ? '⚠️ KIS 계좌를 불러오지 못했어요' : '실제 계좌를 불러오는 중이에요'}</b>
+              <b>{conn !== 'online' ? '봇 서버 미연결 · 계좌 표시 불가' : st.accountError ? '⚠️ KIS 계좌 조회 실패' : '계좌 불러오는 중'}</b>
               {st?.accountError && <p>{st.accountError}</p>}
-              <p className="dim">예수금·보유 종목은 KIS에서 받은 값만 표시합니다.</p>
+              <p className="dim">예수금·보유 종목은 KIS 값만 표시</p>
             </div>
           ) : (
             <>
@@ -441,7 +479,7 @@ export default function App() {
                 </div>
               </div>
               <p className="pf-formula">= 외화 예수금 <b>{usd(acct.cash.deposit)}</b> + 보유 주식 <b>{usd(acct.totals.stocks)}</b></p>
-              {m.pf.equity.length > 1 ? <EquityChart data={m.pf.equity} base={m.pf.equity[0]} /> : <p className="wl-empty">평가금액 추이는 화면을 연 뒤부터 쌓입니다.</p>}
+              {m.pf.equity.length > 1 ? <EquityChart data={m.pf.equity} base={m.pf.equity[0]} /> : <p className="wl-empty">평가금액 추이: 화면을 연 뒤부터 기록</p>}
               <dl className="kv">
                 <div><dt>외화 예수금</dt><dd>{usd(acct.cash.deposit)}</dd></div>
                 <div><dt>평가손익</dt><dd style={{ color: tone(stockPnl) }}>{stockPnl > 0 ? '+' : ''}{usd(stockPnl)}</dd></div>
@@ -451,14 +489,6 @@ export default function App() {
             </>
           )}
           {st?.guard && <GuardBox g={st.guard} />}
-          <div className={`ark ark-${m.ark}`} onClick={() => setOpenAgent('na')} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && setOpenAgent('na')}>
-            <ArkIcon closed={m.ark !== 'open'} />
-            <div>
-              <b>노아의 방주 {m.ark === 'open' ? '열림' : m.ark === 'closed' ? '닫힘' : '판단 대기'}</b>
-              <span>{m.ark === 'open' ? `신규 매수 가능 · ${m.arkReason}` : m.arkReason}</span>
-            </div>
-            <div className="vix"><span>QQQ</span><b style={{ color: tone(m.index?.changePct) }}>{m.index?.changePct != null ? `${m.index.changePct > 0 ? '+' : ''}${m.index.changePct.toFixed(2)}%` : '-'}</b></div>
-          </div>
           {working.length > 0 && (
             <ul className="orders">
               {working.map((o) => (
@@ -469,6 +499,39 @@ export default function App() {
               ))}
             </ul>
           )}
+        </section>
+
+        <section className="win">
+          <h2 className="win-title">보유 종목 <span className="dim">{control === 'manual' ? '사용자 지침 + 강제 손절선' : '모세 판단 + 강제 손절선'}</span></h2>
+          <ul className="holds">
+            {!acct && <li className="dim">계좌 조회 후 표시</li>}
+            {acct && Object.keys(m.pf.pos).length === 0 && <li className="dim">보유 종목 없음</li>}
+            {acct &&
+              Object.entries(m.pf.pos).map(([code, p]) => {
+                const t = m.tickers.find((x) => x.code === code);
+                const price = t?.price || p.price;
+                const r = price / p.avg - 1;
+                const j = m.moses[code];
+                const lv = j ? levelOf(j) : 'calm';
+                return (
+                  <li key={code} className="hold-ai">
+                    <span>{code}</span>
+                    <span className="dim">{p.qty}주</span>
+                    <span style={{ color: tone(r) }}>{pct(r)}</span>
+                    <span className={`mj mj-${lv}`} title={j ? j.reasons.join(', ') : ''}>
+                      {j ? (j.hard ? '강제 손절' : lv === 'watch' ? '주의' : ACTION_LABEL[j.action] === '보유' ? '보유' : `${ACTION_LABEL[j.action]} 판단`) : '대기'}
+                    </span>
+                    {j && (
+                      <small className="mj-note">
+                        {j.trailStop ? <>트레일링 스톱 <b>{usd(j.trailStop)}</b></> : <>하락 압력 <b>{j.pressure}</b></>}
+                        <span>{j.reasons[0]}</span>
+                      </small>
+                    )}
+                  </li>
+                );
+              })}
+          </ul>
+          <p className="mj-legend">{st ? `강제 손절선 -${st.settings.rules.hardStopPct}% 서버 집행 · ${control === 'manual' ? `수동 지침 손절 ${st.settings.rules.stop}% / 익절 +${st.settings.rules.take}%` : '그 외 손절·익절은 모세가 5분봉·1호가·QQQ로 판단'}` : '봇 서버 연결 후 표시'}</p>
         </section>
 
         <section className="win">
@@ -491,12 +554,12 @@ export default function App() {
             <GapInfo gap={st?.gap} rules={m.rules} disabled={conn !== 'online'} onScan={runGapScan} msg={wlMsg} news={st?.news} />
           ) : (
             <>
-              <p className="wl-msg">{davidOn ? '다윗이 KIS 순위 API로 발굴해 관망 중인 종목이에요. 마음에 들면 수동으로 옮기세요.' : '탐색 모드가 꺼져 있어 이 목록은 S티어 스캔과 시세 갱신에서 빠져 있어요.'}</p>
+              <p className="wl-msg">{davidOn ? '다윗이 KIS 순위로 발굴한 관망 종목 · ↑수동으로 옮기기 가능' : '탐색 꺼짐 · 이 목록은 스캔·시세 갱신 제외'}</p>
               {wlMsg && <p key={wlMsg.key} className={`wl-msg ${wlMsg.kind}`} role="status">{wlMsg.text}</p>}
             </>
           )}
           {shownList.length === 0 ? (
-            <p className="wl-empty">{conn !== 'online' ? '봇 서버에 연결되면 관심 종목이 표시됩니다.' : wlTab === 'manual' ? EMPTY_MSG : wlTab === 'gap' ? '오늘의 갭 후보가 아직 없어요. 장전(한국 22:30~23:25, 서머타임 21:30~22:25)에 10분마다 찾아요.' : davidOn ? '아직 발굴한 종목이 없어요. 정규장 중 주기적으로 탐색해요.' : 'AI 관심종목이 비어 있어요. 다윗 탐색 모드를 켜면 채워집니다.'}</p>
+            <p className="wl-empty">{conn !== 'online' ? '봇 서버 연결 후 표시' : wlTab === 'manual' ? EMPTY_MSG : wlTab === 'gap' ? '오늘 갭 후보 없음 · 장전 한국 22:30~23:25(서머타임 21:30~22:25) 10분마다 탐색' : davidOn ? '발굴 종목 없음 · 정규장 중 주기 탐색' : 'AI 관심종목 비어 있음 · 다윗 탐색을 켜면 채워짐'}</p>
           ) : (
             <table className="watch">
               <tbody>
@@ -542,67 +605,53 @@ export default function App() {
         </section>
 
         <section className="win">
-          <h2 className="win-title">S티어 스캐너 <span className="dim">A·B·C 중 하나면 매수 후보</span></h2>
+          <h2 className="win-title">S티어 스캐너 <span className="dim">D·승격된 전략 신호만 매수 (점선 = 가상 거래만)</span></h2>
           <STierPanel market={m} mode={mode} onSelect={setTicker} davidOn={davidOn} />
         </section>
 
-        <section className="win">
-          {sel && sel.candles.length ? (
-            <>
-              <h2 className="win-title">{sel.name} 5분봉 <span className="dim">KIS</span></h2>
-              <CandleChart t={sel} live />
-              <div className="chart-foot">
-                <span>현재가 <b style={{ color: tone(sel.price - sel.open) }}>{usd(sel.price)}</b></span>
-                <span><i className="sw sw-ma" />5봉 평균</span>
-              </div>
-            </>
-          ) : (
-            <>
-              <h2 className="win-title">5분봉</h2>
-              <p className="wl-empty">{!sel ? EMPTY_MSG : `${sel.name} 5분봉을 KIS에서 받는 중이에요.`}</p>
-            </>
-          )}
-        </section>
 
-        <section className="win">
-          <h2 className="win-title">보유 종목 <span className="dim">{control === 'manual' ? '사용자 지침 + 강제 손절선' : '모세 판단 + 강제 손절선'}</span></h2>
-          <ul className="holds">
-            {!acct && <li className="dim">계좌를 불러오면 표시됩니다.</li>}
-            {acct && Object.keys(m.pf.pos).length === 0 && <li className="dim">보유 종목이 없어요.</li>}
-            {acct &&
-              Object.entries(m.pf.pos).map(([code, p]) => {
-                const t = m.tickers.find((x) => x.code === code);
-                const price = t?.price || p.price;
-                const r = price / p.avg - 1;
-                const j = m.moses[code];
-                const lv = j ? levelOf(j) : 'calm';
-                return (
-                  <li key={code} className="hold-ai">
-                    <span>{code}</span>
-                    <span className="dim">{p.qty}주</span>
-                    <span style={{ color: tone(r) }}>{pct(r)}</span>
-                    <span className={`mj mj-${lv}`} title={j ? j.reasons.join(', ') : ''}>
-                      {j ? (j.hard ? '강제 손절' : lv === 'watch' ? '주의' : ACTION_LABEL[j.action] === '보유' ? '보유' : `${ACTION_LABEL[j.action]} 판단`) : '대기'}
-                    </span>
-                    {j && (
-                      <small className="mj-note">
-                        {j.trailStop ? <>트레일링 스톱 <b>{usd(j.trailStop)}</b></> : <>하락 압력 <b>{j.pressure}</b></>}
-                        <span>{j.reasons[0]}</span>
-                      </small>
-                    )}
-                  </li>
-                );
-              })}
-          </ul>
-          <p className="mj-legend">{st ? `강제 손절선 -${st.settings.rules.hardStopPct}%는 브라우저와 상관없이 서버가 집행합니다. ${control === 'manual' ? `수동 지침: 손절 ${st.settings.rules.stop}% / 익절 +${st.settings.rules.take}%.` : '그 위에서 모세가 실제 5분봉·1호가·QQQ로 손절/익절을 판단합니다.'}` : '봇 서버 연결 후 표시됩니다.'}</p>
-        </section>
+        </div>
 
+        <div className="tab-pane" style={{ display: rightTab === 'perf' ? undefined : 'none' }}>
         <PnlCalendar live={conn === 'online'} env={st?.env} />
-        <StatsPanel stats={stats} env={st?.env} health={m.health} modes={m.strategyModes} onMode={(id, v) => setSettings({ strategyModes: { [id]: v } })} />
+        <TradeHistory stats={stats} onSelect={setTicker} />
+        <StatsPanel stats={stats} env={st?.env} health={m.health} modes={m.strategyModes} promo={st?.promo} rules={m.rules} onMode={(id, v) => setSettings({ strategyModes: { [id]: v } })} />
+        </div>
+
+        <div className="tab-pane" style={{ display: rightTab === 'shadow' ? undefined : 'none' }}>
+        <ShadowSummary shadows={st?.shadows} promo={st?.promo} rules={{ ...m.rules, promoteMin: st?.promoBar?.minTrades ?? m.rules?.promoteMin }} regime={st?.regime} />
+        <ShadowCalendar live={conn === 'online'} />
+        <section className="win">
+          <h2 className="win-title">전략 승격 <span className="dim">가상 성적 기준</span></h2>
+          <CandidatePanel promo={st?.promo} bar={st?.promoBar} registry={st?.registry} health={m.health} modes={m.strategyModes} rules={m.rules} onMode={(id, v) => setSettings({ strategyModes: { [id]: v } })} />
+        </section>
+        <ShadowLog data={st?.shadows} uni={st?.shadowUni} rules={m.rules} onSettings={setSettings} onSelect={setTicker} />
+        </div>
       </aside>
 
       {openAgent && <AgentModal id={openAgent} onClose={() => setOpenAgent(null)} officeRef={officeRef} avatars={avatars} messages={messages} reports={reportsRef.current} moses={m.moses} />}
     </div>
+  );
+}
+
+
+// 상단 상태 줄: 한눈에 "지금 괜찮은지" (계좌·오늘 손익·보호 잠금·방주·주문)
+function StatusStrip({ st, m, conn, working, onArk }) {
+  if (conn !== 'online' || !st) return null;
+  const a = st.account;
+  const g = st.guard || {};
+  const pnl = g.dayPnlPct;
+  const ark = m.ark;
+  return (
+    <section className="status-strip" aria-label="현재 상태">
+      <div className="ss-item"><span>총 평가</span><b>{a ? usd(a.totals.total) : '-'}</b></div>
+      <div className="ss-item"><span>예수금</span><b>{a ? usd(a.cash.deposit) : '-'}</b></div>
+      <div className="ss-item"><span>오늘 손익</span><b style={{ color: tone(pnl) }}>{pnl == null ? '-' : `${pnl > 0 ? '+' : ''}${pnl.toFixed(2)}%`}</b><small>셧다운 -{g.limitPct ?? '-'}%</small></div>
+      <div className={`ss-item ${g.shutdown ? 'bad' : ''}`}><span>보호 잠금</span><b>{g.shutdown ? '⛔ 셧다운' : '정상'}</b><small>보유 {g.positions ?? 0}/{g.maxPositions ?? '-'}</small></div>
+      <button type="button" className={`ss-item ark-${ark}`} onClick={onArk}><span>방주 (QQQ)</span><b>{ark === 'open' ? '열림' : ark === 'closed' ? '닫힘' : '대기'}</b><small style={{ color: tone(m.index?.changePct) }}>{m.index?.changePct != null ? `${m.index.changePct > 0 ? '+' : ''}${m.index.changePct.toFixed(2)}%` : '-'}</small></button>
+      <div className="ss-item"><span>진행 중 주문</span><b>{working.length}건</b>{working[0] && <small>{working[0].side === 'buy' ? '매수' : '매도'} {working[0].symbol}</small>}</div>
+      {st.emergency && <div className="ss-item bad"><span>비상</span><b>KIS {st.emergency}</b></div>}
+    </section>
   );
 }
 
@@ -631,7 +680,7 @@ function OfflineCard({ conn }) {
   return (
     <section className="win offline-card">
       <h2 className="win-title">봇 서버 {conn === 'connecting' ? '연결 중' : '미연결'}</h2>
-      <p>이 화면은 매매 봇 서버의 실제 상태만 보여 줍니다. 서버가 없으면 시세·계좌·신호를 만들어 내지 않아요.</p>
+      <p>봇 서버의 실제 상태만 표시 · 서버 없으면 시세·계좌·신호 없음</p>
       <ol>
         <li><code>docker compose up -d</code> 후 <b>http://localhost:8787</b> 접속</li>
         <li>또는 <code>npm run server</code> + <code>npm run dev</code></li>
@@ -644,22 +693,24 @@ function OfflineCard({ conn }) {
 function GapInfo({ gap, rules, disabled, onScan, msg, news }) {
   const R = rules || {};
   const items = gap?.today ? gap.items || [] : [];
+  const pre = !gap?.phase || gap.phase === 'pre'; // 스캔한 시각이 장전이면 프리마켓 값, 장중이면 그날 정규장 값
+  const canScan = !gap?.today || !gap.finalized || gap.phase !== 'open';
   return (
     <div className="gap-info">
       <p className="wl-msg">
-        트랙 1: 장전에 갭 +{R.gapMinPct ?? 4}~{R.gapMaxPct ?? 25}%, ${R.gapMinPrice ?? 5}~{R.gapMaxPrice ?? 30}, 프리마켓 {Math.round((R.gapMinPreVol ?? 500000) / 1000)}K주 또는 ${R.gapMinPreAmtM ?? 5}M 이상, 시총 ${R.gapMinMcapM ?? 300}M 이상인 종목 상위 {R.gapTopN ?? 5}개. 개장 후 {(R.orbBars ?? 3) * 5}분 시가 범위 고가를 거래량과 함께 넘으면 매수(D), 손절은 범위 저가와 -2% 중 가까운 쪽, {R.orbEndMin ?? 90}분 이후엔 진입 안 함.
+        트랙 1 · 갭 +{R.gapMinPct ?? 4}~{R.gapMaxPct ?? 25}% · ${R.gapMinPrice ?? 5}~{R.gapMaxPrice ?? 30} · 프리마켓 {Math.round((R.gapMinPreVol ?? 500000) / 1000)}K주/${R.gapMinPreAmtM ?? 5}M↑ · 시총 ${R.gapMinMcapM ?? 300}M↑ · 상위 {R.gapTopN ?? 5}개 · 개장 {(R.orbBars ?? 3) * 5}분 고가 돌파 시 매수(D) · 손절 범위 저가/−2% · {R.orbEndMin ?? 90}분 후 진입 안 함
       </p>
       <p className="wl-msg dim">
         {gap?.today ? `${tsShort(gap.at)} ${gap.finalized ? '확정' : `스캔 ${gap.scans}회째`}${gap.source === 'open' ? ' (개장 직후 등락률 기준)' : gap.source === 'manual' ? ' (수동 실행)' : ''} · 순위 ${gap.scanned ?? '-'}개 중 조건 통과 ${gap.passed ?? '-'}개` : '오늘 스캔 전'}
         {R.gapScan === false && ' · 갭 스캔 꺼짐'}
         {news && ` · 뉴스: ${news.alphaVantage?.enabled ? `Alpha Vantage 오늘 ${news.alphaVantage.used}/${news.alphaVantage.limit}회` : 'Alpha Vantage 키 없음'}${news.yahoo?.enabled ? (news.yahoo.blocked ? ' · 야후 잠시 차단됨' : ' · 야후') : ''} · KIS`}
         {' '}
-        <button type="button" className="mini" disabled={disabled || gap?.busy} onClick={onScan}>{gap?.busy ? '스캔 중…' : '지금 스캔'}</button>
+        <button type="button" className="mini" disabled={disabled || gap?.busy} onClick={onScan} title="장전: 프리마켓 기준 재탐색 · 장중: 오늘 후보 유지, 참고용 결과만 표시">{gap?.busy ? '스캔 중…' : '지금 스캔'}</button>
       </p>
       {items.length > 0 && (
         <table className="gap-tbl">
           <thead>
-            <tr><th>종목</th><th>갭</th><th>가격</th><th>프리마켓</th><th>프리 RVol</th><th>시총</th><th>뉴스</th></tr>
+            <tr><th>종목</th><th>갭</th><th>가격</th><th>{pre ? '프리마켓' : '오늘 거래'}</th><th title={pre ? '프리마켓 거래량 ÷ 평소 하루 거래량' : '오늘 거래량 ÷ 평소 하루 거래량 (시간 보정 없음)'}>{pre ? '프리 RVol' : '하루 대비'}</th><th>시총</th><th>뉴스</th></tr>
           </thead>
           <tbody>
             {items.map((g) => (
@@ -677,55 +728,325 @@ function GapInfo({ gap, rules, disabled, onScan, msg, news }) {
         </table>
       )}
       {gap?.today && gap.dropped?.length > 0 && <p className="wl-msg dim">제외: {gap.dropped.slice(0, 6).join(', ')}</p>}
+      {gap?.preview && (
+        <p className="wl-msg dim">
+          장중 참고 스캔 ({tsShort(gap.preview.at)}, 오늘 후보는 그대로): {gap.preview.items.length ? gap.preview.items.map((g) => `${g.symbol} +${g.gapPct}%`).join(' · ') : '조건 맞는 종목 없음'}
+        </p>
+      )}
       {msg && <p key={msg.key} className={`wl-msg ${msg.kind}`} role="status">{msg.text}</p>}
     </div>
   );
 }
 
-function StrategySwitches({ health, modes, onMode }) {
-  const ex = (x) => (x?.expectancyPct == null ? '-' : `${x.expectancyPct > 0 ? '+' : ''}${x.expectancyPct.toFixed(2)}%`);
+// 실거래 내역: 실제로 사고판 거래 한 건씩 + 같은 신호의 가상 결과와 비교
+function TradeHistory({ stats, onSelect }) {
+  const [who, setWho] = useState('bot');
+  const rows = (stats?.recent || []).filter((t) => (who === 'bot' ? t.source !== 'external' : t.source === 'external'));
+  const pctS = (v) => (v == null || !Number.isFinite(v) ? '-' : `${v > 0 ? '+' : ''}${v.toFixed(2)}%`);
+  const t5 = (iso) => (iso ? new Date(iso).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) : '');
+  const hold = (m) => (m == null ? '-' : m >= 60 ? `${Math.floor(m / 60)}시간 ${m % 60}분` : `${m}분`);
+  const g = stats?.realVsShadow;
   return (
-    <div className="strat-sw">
-      <p className="wl-msg">전략 자동 선택: 실거래가 쌓이면 성과가 나쁜 전략을 끄고, 꺼진 뒤에도 신호는 가상 거래로 계속 재서 좋아지면 다시 켭니다.</p>
-      <table className="stats">
-        <thead>
-          <tr><th>전략</th><th>상태</th><th>실거래(최근)</th><th>가상 거래</th><th>모드</th></tr>
-        </thead>
-        <tbody>
-          {['A', 'B', 'C', 'D'].map((id) => {
-            const h = health?.[id];
-            const mode = modes?.[id] || 'auto';
-            return (
-              <tr key={id} title={h?.reason || ''}>
-                <td>{id} {STRATEGIES[id].name}</td>
-                <td><b className={`st-chip ${h?.status === 'off' ? 'off' : 'on'}`}>{h?.status === 'off' ? '꺼짐' : '켜짐'}</b></td>
-                <td>{h ? `${h.real.trades}건 ${ex(h.real)}` : '-'}</td>
-                <td>{h ? `${h.shadow.trades}건 ${h.shadow.winRate == null ? '' : `승 ${Math.round(h.shadow.winRate * 100)}% `}${ex(h.shadow)}` : '-'}</td>
-                <td className="mode-btns">
-                  {[['auto', '자동'], ['on', '켬'], ['off', '끔']].map(([v, l]) => (
-                    <button key={v} type="button" className={mode === v ? 'on' : ''} onClick={() => onMode(id, v)}>{l}</button>
-                  ))}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+    <section className="win">
+      <h2 className="win-title">실거래 내역 <span className="dim">수수료 뺀 손익 · 최근 50건</span></h2>
+      <div className="wl-tabs" role="tablist" aria-label="거래 구분">
+        <button type="button" role="tab" aria-selected={who === 'bot'} className={who === 'bot' ? 'on' : ''} onClick={() => setWho('bot')}>봇 거래 <b>{(stats?.recent || []).filter((t) => t.source !== 'external').length}</b></button>
+        <button type="button" role="tab" aria-selected={who === 'ext'} className={who === 'ext' ? 'on' : ''} onClick={() => setWho('ext')}>직접 거래 <b>{(stats?.recent || []).filter((t) => t.source === 'external').length}</b></button>
+      </div>
+      {!rows.length ? (
+        <p className="wl-empty">{who === 'bot' ? '봇 실거래 없음 · D나 승격 전략의 첫 청산부터 기록' : '앱·HTS에서 직접 사고판 거래 기록'}</p>
+      ) : (
+        <ul className="trade-list">
+          {rows.map((t) => (
+            <li key={t.tradeId || `${t.symbol}-${t.closedAt}`} onClick={() => onSelect(t.symbol)}>
+              <div className="tl-1">
+                <b>{t.symbol}</b>
+                <span className="dim">{(t.strategies || []).join('+') || '직접'}{t.profile ? `·${t.profile}` : ''}</span>
+                <span className="tl-pnl" style={{ color: tone(t.pnl) }}>{pctS(t.pnlPct)} <small>({t.pnl > 0 ? '+' : ''}{usd(t.pnl)})</small></span>
+              </div>
+              <div className="tl-2 dim">
+                {t5(t.closedAt)} · {usd(t.entryAvg)} → {usd(t.exitAvg)} · {t.qty}주 · {hold(t.holdMin)} · {t.exitReason || '-'}
+                {who === 'bot' && <> · 가상 <span style={{ color: tone(t.shadow?.pnlPct) }} title={t.shadow?.why || '같은 신호의 가상 거래를 못 찾음'}>{t.shadow ? pctS(t.shadow.pnlPct) : '-'}</span></>}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {who === 'bot' && (
+        <p className="mj-legend">
+          {g?.pairs ? (
+            <>실거래 − 가상 평균 차이 <b style={{ color: tone(g.avgGapPct) }}>{pctS(g.avgGapPct)}</b> ({g.pairs}건) · 크게 마이너스면 가상 성적이 낙관적이라는 뜻</>
+          ) : (
+            '"가상" = 같은 신호의 가상 결과 · 실거래와의 평균 차이도 여기 표시'
+          )}
+        </p>
+      )}
+    </section>
+  );
+}
+
+// 가상 매매 기록: 신호마다 "규칙대로 샀다면"을 따라가는 가상 포지션과 청산 결과
+function ShadowUniverse({ uni, rules, onSettings }) {
+  const [edit, setEdit] = useState(false);
+  const [fixed, setFixed] = useState('');
+  const [autoN, setAutoN] = useState(5);
+  const [gap, setGap] = useState(true);
+  if (!uni) return null;
+  const start = () => {
+    setFixed((uni.fixed || []).join(', '));
+    setAutoN(uni.autoN ?? 5);
+    setGap(rules?.shadowGap !== false);
+    setEdit(true);
+  };
+  const save = async () => {
+    await onSettings({ rules: { shadowFixed: fixed.split(/[\s,]+/).filter(Boolean), shadowAutoN: autoN, shadowGap: gap } });
+    setEdit(false);
+  };
+  const d = uni.date ? `${uni.date.slice(5, 7)}.${uni.date.slice(8, 10)}` : '';
+  return (
+    <div className="sh-uni">
+      {uni.reset && <p className="wl-msg ok">가상 기록 초기화됨 · 새로 집계 중</p>}
+      <p className="sh-uni-row"><b>고정</b> <span>{(uni.fixed || []).join(' · ') || '-'}</span></p>
+      <p className="sh-uni-row"><b>자동</b> <span>{uni.auto?.length ? `${uni.auto.map((a) => a.symbol).join(' · ')} (${d} 고정)` : `뉴욕 09:20 이후 거래량 상위 ${uni.autoN ?? 0}개 선정`}</span></p>
+      <p className="wl-msg">관심 종목은 가상 기록 안 함 · 갭 후보 {rules?.shadowGap === false ? '제외' : '포함'} · 가상 전용 종목은 실매수 안 함
+        {!edit && <button type="button" className="sh-uni-edit" onClick={start}>편집</button>}
+      </p>
+      {edit && (
+        <div className="sh-uni-form">
+          <label>고정 종목 <input value={fixed} onChange={(e) => setFixed(e.target.value.toUpperCase())} placeholder="AAPL, MSFT, SPY" /></label>
+          <label>자동 개수
+            <select className="mode-sel" value={autoN} onChange={(e) => setAutoN(+e.target.value)}>
+              {[0, 2, 3, 4, 5, 6, 8].map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+          <label className="chk"><input type="checkbox" checked={gap} onChange={(e) => setGap(e.target.checked)} /> 갭 후보도 가상 기록</label>
+          <div className="sh-uni-btns">
+            <button type="button" onClick={save}>저장</button>
+            <button type="button" onClick={() => setEdit(false)}>취소</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function StatsPanel({ stats, env, health, modes, onMode }) {
+function ShadowLog({ data, uni, rules, onSettings, onSelect }) {
+  const [tab, setTab] = useState('open');
+  const open = data?.open || [];
+  const recent = data?.recent || [];
+  const pctS = (v) => (v == null ? '-' : `${v > 0 ? '+' : ''}${v.toFixed(2)}%`);
+  const t5 = (iso) => (iso ? new Date(iso).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) : '');
+  const tag = (x) => `${(x.strategies || []).join('+')}${x.profile ? `·${x.profile}` : ''}`;
+  return (
+    <section className="win shadow-win">
+      <h2 className="win-title">가상 매매 기록 <span className="dim">돈을 쓰지 않고 신호마다 사고팔아 본 결과</span></h2>
+      <ShadowUniverse uni={uni} rules={rules} onSettings={onSettings} />
+      <div className="wl-tabs" role="tablist" aria-label="가상 매매 구분">
+        <button type="button" role="tab" aria-selected={tab === 'open'} className={tab === 'open' ? 'on' : ''} onClick={() => setTab('open')}>진행 중 <b>{open.length}</b></button>
+        <button type="button" role="tab" aria-selected={tab === 'done'} className={tab === 'done' ? 'on' : ''} onClick={() => setTab('done')}>청산됨 (최근) <b>{recent.length}</b></button>
+      </div>
+      {tab === 'open' ? (
+        !open.length ? <p className="wl-empty">진행 중인 가상 매수 없음 · 장중 신호 때 생성</p> : (
+          <table className="stats sh-tbl">
+            <thead><tr><th>종목</th><th>전략</th><th>가상 매수</th><th>지금</th><th>목표 / 손절</th></tr></thead>
+            <tbody>
+              {open.map((x) => {
+                const p = x.price && x.entry ? (x.price / x.entry - 1) * 100 : null;
+                return (
+                  <tr key={x.id} onClick={() => onSelect(x.symbol)}>
+                    <td>{x.symbol}<small className="dim"> {t5(x.openedAt)}</small></td>
+                    <td>{tag(x)}</td>
+                    <td>{usd(x.entry)}</td>
+                    <td style={{ color: tone(p) }}>{p == null ? '-' : pctS(p)}</td>
+                    <td className="dim">+{x.tpPct}% / −{x.slPct}%</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )
+      ) : !recent.length ? <p className="wl-empty">청산된 가상 거래 없음</p> : (
+        <table className="stats sh-tbl">
+          <thead><tr><th>종목</th><th>전략</th><th>매수 → 매도</th><th>결과</th><th>사유</th></tr></thead>
+          <tbody>
+            {recent.map((x, i) => (
+              <tr key={`${x.symbol}-${x.closedAt}-${i}`} onClick={() => onSelect(x.symbol)}>
+                <td>{x.symbol}<small className="dim"> {t5(x.closedAt)}</small></td>
+                <td>{tag(x)}</td>
+                <td>{usd(x.entry)} → {usd(x.exit)}</td>
+                <td style={{ color: tone(x.pnlPct) }}>{pctS(x.pnlPct)}</td>
+                <td className="dim">{x.why}{x.bars ? ` · ${x.bars * 5}분` : ''}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <p className="mj-legend">왕복 비용 뺀 값 · 전략 승격 표의 근거 · P1 +2%/−1% · P2 +3%/−1.5% · P3 +5%/−2%</p>
+    </section>
+  );
+}
+
+function CandidatePanel({ promo, health, modes, rules, onMode, bar, registry }) {
+  const [open, setOpen] = useState(null); // 팝업으로 볼 전략 id
+  if (!promo || !Object.keys(promo).length) return null;
+  const R = rules || {};
+  const ex = (v) => (v == null ? '-' : `${v > 0 ? '+' : ''}${v.toFixed(2)}%`);
+  const wr = (x) => (x?.winRate == null ? '-' : `${Math.round(x.winRate * 100)}%`);
+  const best = (p) => Object.entries(p.profiles).sort((a, b) => (b[1].trades || 0) - (a[1].trades || 0) || (b[1].expectancyPct ?? -99) - (a[1].expectancyPct ?? -99))[0];
+  const rows = [{ id: 'D' }, ...Object.values(promo)];
+  const minT = bar?.minTrades ?? R.promoteMin ?? 40;
+  const minE = bar?.minExp ?? R.promoteExp ?? 0.3;
+  const minD = bar?.minDays ?? R.promoteDays ?? 15;
+  const live = (p) => p.status === 'promoted' || p.status === 'regime';
+  const stLabel = (p) => (p.status === 'promoted' ? `승격 ${p.profile}` : p.status === 'regime' ? `${(p.dirs || []).join('/')} 한정 ${p.profile}` : '관찰');
+  const nm = (id) => ALL_STRATEGIES[id]?.name || id;
+  const modeSel = (id) => (
+    <select className="mode-sel" value={modes?.[id] || 'auto'} onChange={(e) => onMode(id, e.target.value)} aria-label={`${id} 모드`}>
+      <option value="auto">자동</option>
+      <option value="on">{id === 'D' ? '켬' : '승격'}</option>
+      <option value="off">{id === 'D' ? '끔' : '관찰'}</option>
+    </select>
+  );
+  const P = open && open !== 'D' ? promo[open] : null;
+  const H = open ? health?.[open] : null;
+  return (
+    <div className="strat-sw cand">
+      <h3 className="cand-h"><span className="dim">D 외 전략은 가상 성적이 조건을 넘어야 실매수<span className="cand-mob"> · 눌러서 자세히</span></span></h3>
+      <p className="wl-msg">조건: 가상 {minT}건↑ · 기대값 +{minE}%↑ · PF {bar?.minPF ?? R.promotePF ?? 1.3}↑ · 거래일 {minD}일↑ · 앞뒤 절반 플러스{bar?.extra ? ` (후보 ${bar.active}개 → 기준 상향)` : ''} · 장세 하나에서만 통과하면 그 장세 한정</p>
+      {registry && (
+        <p className="wl-msg cand-reg">
+          대기열 {registry.queued.length ? registry.queued.map((id) => `${id} ${nm(id)}`).join(' · ') : '없음'}
+          {' · '}은퇴 {registry.retired.length ? registry.retired.map((r) => <span key={r.id} title={`${r.retiredAt} ${r.reason}`}>{r.id} {nm(r.id)} </span>) : '없음'}
+          <br />은퇴: 100건·30일↑인데 기대값 −0.1%↓ · 60일에 40건 미만 · 90일 동안 승격 못 함 → 결번, 대기열 순서로 투입
+        </p>
+      )}
+      <table className="stats cand-pc cand-grid">
+        <thead><tr><th>전략</th><th>상태</th><th>청산</th><th>건수</th><th>거래일</th><th>승률</th><th>기대값</th><th>PF</th><th>실거래</th><th>모드</th></tr></thead>
+        <tbody>
+          <tr className="grp">
+            <td>D {ALL_STRATEGIES.D.name}</td>
+            <td>{health?.D?.status === 'off' ? '꺼짐' : '기본'}</td>
+            <td className="pid dim">추적</td>
+            <td className="n">{health?.D?.shadow?.trades ?? 0}</td>
+            <td className="n dim">-</td>
+            <td className="n">{wr(health?.D?.shadow)}</td>
+            <td className="n" style={{ color: tone(health?.D?.shadow?.expectancyPct) }}>{ex(health?.D?.shadow?.expectancyPct)}</td>
+            <td className="n">{health?.D?.shadow?.profitFactor ?? '-'}</td>
+            <td className="n">{health?.D?.real?.trades ?? 0}건 <span style={{ color: tone(health?.D?.real?.expectancyPct) }}>{ex(health?.D?.real?.expectancyPct)}</span></td>
+            <td>{modeSel('D')}</td>
+          </tr>
+          {Object.values(promo).flatMap((p) => {
+            const list = Object.entries(p.profiles);
+            const h = health?.[p.id];
+            return list.map(([pid, x], i) => (
+              <tr key={p.id + pid} title={p.reason} className={`${i === 0 ? 'grp' : ''} ${x.pass ? 'pass' : ''} ${pid === p.profile ? 'cur' : ''}`}>
+                {i === 0 && <td rowSpan={list.length} style={live(p) ? { color: 'var(--mint)' } : undefined}>{p.id} {p.name}</td>}
+                {i === 0 && <td rowSpan={list.length}>{stLabel(p)}</td>}
+                <td className="pid">{pid} <small className="dim">+{EXIT_PROFILES[pid].tpPct}/−{EXIT_PROFILES[pid].slPct}</small></td>
+                <td className="n">{x.trades}<small className="dim">/{minT}</small></td>
+                <td className="n">{x.days ?? 0}<small className="dim">/{minD}</small></td>
+                <td className="n">{wr(x)}</td>
+                <td className="n" style={{ color: tone(x.expectancyPct) }}>{ex(x.expectancyPct)}</td>
+                <td className="n">{x.profitFactor ?? '-'}</td>
+                {i === 0 && <td rowSpan={list.length} className="n">{h?.real?.trades ?? 0}건 <span style={{ color: tone(h?.real?.expectancyPct) }}>{ex(h?.real?.expectancyPct)}</span>{h?.status === 'off' ? ' 꺼짐' : ''}</td>}
+                {i === 0 && <td rowSpan={list.length}>{modeSel(p.id)}</td>}
+              </tr>
+            ));
+          })}
+        </tbody>
+      </table>
+      <p className="mj-legend cand-pc">초록 = 조건 통과 · 굵게 = 매매에 쓰는 청산 · 마우스 올리면 사유</p>
+      <ul className="cand-list cand-mob">
+        {rows.map((r) => {
+          if (r.id === 'D') {
+            const h = health?.D;
+            return (
+              <li key="D">
+                <button type="button" onClick={() => setOpen('D')}>
+                  <span className="cl-name">D {ALL_STRATEGIES.D.name}</span>
+                  <b className={`st-chip ${h?.status === 'off' ? 'off' : 'on'}`}>{h?.status === 'off' ? '꺼짐' : '기본'}</b>
+                  <span className="cl-sum dim">가상 {h?.shadow?.trades ?? 0}건 {ex(h?.shadow?.expectancyPct)} · 실 {h?.real?.trades ?? 0}건</span>
+                </button>
+              </li>
+            );
+          }
+          const p = r;
+          const [pid, x] = best(p);
+          return (
+            <li key={p.id} className={live(p) ? 'promoted' : ''}>
+              <button type="button" onClick={() => setOpen(p.id)}>
+                <span className="cl-name">{p.id} {p.name}</span>
+                <b className={`st-chip ${live(p) ? 'on' : 'obs'}`}>{stLabel(p)}</b>
+                <span className="cl-sum dim">{live(p) ? p.profile : pid} {x.trades}/{minT}건 · {x.days ?? 0}/{minD}일 · {ex(x.expectancyPct)}{health?.[p.id]?.real?.trades ? ` · 실 ${health[p.id].real.trades}건` : ''}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {open && (
+        <div className="modal-back" onClick={() => setOpen(null)}>
+          <div className="modal win cand-modal" role="dialog" aria-modal="true" aria-label={`${open} 전략 상세`} onClick={(e) => e.stopPropagation()}>
+            <h2 className="win-title">{open} {ALL_STRATEGIES[open]?.name}</h2>
+            <button type="button" className="modal-x" onClick={() => setOpen(null)} aria-label="닫기">×</button>
+            {open === 'D' ? (
+              <>
+                <p className="wl-msg">트랙 1 · 승격 없이 기본 매수 · 손절 범위 저가/−2% · +{R.minTargetPct ?? 3}%부터 추적 익절</p>
+                <dl className="cand-kv">
+                  <dt>가상</dt><dd>{H?.shadow?.trades ?? 0}건 · 승 {wr(H?.shadow)} · {ex(H?.shadow?.expectancyPct)} · PF {H?.shadow?.profitFactor ?? '-'}</dd>
+                  <dt>실거래</dt><dd>{H?.real?.trades ?? 0}건 · 승 {wr(H?.real)} · {ex(H?.real?.expectancyPct)} · PF {H?.real?.profitFactor ?? '-'}</dd>
+                  <dt>상태</dt><dd>{H?.reason || '-'}</dd>
+                </dl>
+              </>
+            ) : (
+              <>
+                <p className="wl-msg">{P.reason}</p>
+                <table className="stats cand-prof">
+                  <thead><tr><th>청산</th><th>건수</th><th>일</th><th>승률</th><th>기대값</th><th>PF</th><th>앞/뒤</th></tr></thead>
+                  <tbody>
+                    {Object.entries(P.profiles).map(([pid, x]) => (
+                      <tr key={pid} className={`${x.pass ? 'pass' : ''} ${pid === P.profile ? 'cur' : ''}`}>
+                        <td title={`목표 +${EXIT_PROFILES[pid].tpPct}% / 손절 −${EXIT_PROFILES[pid].slPct}% / ${EXIT_PROFILES[pid].holdBars * 5}분`}>{pid} <small className="dim">+{EXIT_PROFILES[pid].tpPct}/−{EXIT_PROFILES[pid].slPct}</small></td>
+                        <td>{x.trades}/{minT}</td>
+                        <td>{x.days ?? 0}/{minD}</td>
+                        <td>{wr(x)}</td>
+                        <td style={{ color: tone(x.expectancyPct) }}>{ex(x.expectancyPct)}</td>
+                        <td>{x.profitFactor ?? '-'}</td>
+                        <td className="dim">{ex(x.h1)} / {ex(x.h2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="mj-legend">초록 = 조건 통과 · 굵게 = 매매에 쓰는 청산</p>
+                <dl className="cand-kv">
+                  <dt>실거래</dt><dd>{H?.real?.trades ?? 0}건 · 승 {wr(H?.real)} · {ex(H?.real?.expectancyPct)}{H?.status === 'off' ? ' · 자동 꺼짐' : ''}</dd>
+                </dl>
+              </>
+            )}
+            <label className="cand-mode">
+              모드
+              <select className="mode-sel" value={modes?.[open] || 'auto'} onChange={(e) => onMode(open, e.target.value)}>
+                <option value="auto">자동</option>
+                <option value="on">{open === 'D' ? '켬' : '승격'}</option>
+                <option value="off">{open === 'D' ? '끔' : '관찰'}</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatsPanel({ stats, env, health, modes, onMode, promo, rules }) {
   const S = stats;
   const f = (x, d = 1) => (x == null ? '-' : `${x.toFixed ? x.toFixed(d) : x}`);
   return (
     <section className="win">
       <h2 className="win-title">전략 성과 <span className="dim">{env === 'real' ? '실전' : env === 'demo' ? '모의투자' : ''} 체결 기록 기준</span></h2>
-      <StrategySwitches health={health} modes={modes} onMode={onMode} />
       {!S ? (
-        <p className="wl-empty">봇 서버 연결 후 표시됩니다.</p>
+        <p className="wl-empty">봇 서버 연결 후 표시</p>
       ) : !S.overall.trades ? (
-        <p className="wl-empty">아직 청산된 봇 거래가 없어요. 진입부터 청산까지 끝난 거래가 쌓이면 전략별 승률·손익비가 계산되고 켈리 입력값에 반영됩니다.</p>
+        <p className="wl-empty">봇 실거래 없음 · D·승격 전략 거래가 청산되면 전략별 승률·손익비 표시</p>
       ) : (
         <>
           <table className="stats">
@@ -733,7 +1054,7 @@ function StatsPanel({ stats, env, health, modes, onMode }) {
               <tr><th>전략</th><th>거래</th><th>승률</th><th>손익비</th><th>PF</th><th>기대값</th></tr>
             </thead>
             <tbody>
-              {[['전체', S.overall], ...['A', 'B', 'C', 'D'].map((id) => [`${id} ${STRATEGIES[id].name}`, S.byStrategy[id]]), ...(S.byStrategy.multi ? [['2개 이상 동시', S.byStrategy.multi]] : []), ...(S.byTrack ? [['트랙 1 (갭 돌파)', S.byTrack.gap], ['장중 스캔', S.byTrack.intraday]] : [])].filter(([, x]) => x).map(([name, x]) => (
+              {[['전체', S.overall], ...Object.keys(ALL_STRATEGIES).filter((id) => 'ABCD'.includes(id) || S.byStrategy[id]?.trades).map((id) => [`${id} ${ALL_STRATEGIES[id].name}`, S.byStrategy[id]]), ...(S.byStrategy.multi ? [['2개 이상 동시', S.byStrategy.multi]] : []), ...(S.byTrack ? [['트랙 1 (갭 돌파)', S.byTrack.gap], ['장중 스캔', S.byTrack.intraday]] : [])].filter(([, x]) => x).map(([name, x]) => (
                 <tr key={name}>
                   <td>{name}</td>
                   <td>{x.trades}</td>
@@ -790,7 +1111,7 @@ function WatchlistTools({ live, busy, msg, onAdd }) {
         <input value={v} onChange={(e) => setV(e.target.value.toUpperCase())} placeholder={live ? '티커 추가 (예: META)' : '봇 서버 연결 후 추가'} aria-label="관심 종목 티커" maxLength={10} disabled={!live} />
         <button type="submit" disabled={!live || !v.trim() || busy}>{busy ? '확인 중' : '추가'}</button>
       </form>
-      <p className="wl-msg dim">KIS 시세로 실제 거래소를 확인한 뒤 서버 관심종목 파일에 저장해요. 보유 종목은 자동으로 감시됩니다.</p>
+      <p className="wl-msg dim">KIS로 거래소 확인 후 저장 · 보유 종목은 자동 감시</p>
       {msg && <p key={msg.key} className={`wl-msg ${msg.kind}`} role="status">{msg.text}</p>}
     </div>
   );
@@ -980,8 +1301,8 @@ function STierPanel({ market, mode, onSelect, davidOn }) {
           <span key={x.id}><b>{x.id}</b> {x.name}</span>
         ))}
       </div>
-      {mode !== 'open' && <p className="wl-msg">정규장(09:30~16:00 ET)에만 판정해요. 장 밖에서는 마지막 판정이 그대로 남아 있어요.</p>}
-      {market.rules && <p className="wl-msg">예상 변동폭이 목표 {market.rules.minTargetPct}% 이상인 종목만 진입 (왕복 비용 {market.costPct?.toFixed(2)}%). 초록 = 통과, 회색 = 변동성 부족</p>}
+      {mode !== 'open' && <p className="wl-msg">정규장(09:30~16:00 ET)에만 판정 · 장 밖에선 마지막 판정 유지</p>}
+      {market.rules && <p className="wl-msg">예상 변동폭 ≥ 목표 {market.rules.minTargetPct}%만 진입 (비용 {market.costPct?.toFixed(2)}%) · 초록 통과 / 회색 부족</p>}
       <table>
         <tbody>
           {rows.map(({ t, r }) => (
@@ -990,12 +1311,17 @@ function STierPanel({ market, mode, onSelect, davidOn }) {
               {['A', 'B', 'C', 'D'].map((id) => {
                 const x = r?.results?.find((y) => y.id === id);
                 return (
-                  <td key={id} title={x ? (x.fired ? x.detail : x.reason || x.detail) : id === 'D' ? '갭 후보만 판정' : '데이터 부족'}>
-                    <i className={`lamp ${x?.fired ? 'on' : x?.reason ? 'na' : ''}`}>{id}</i>
+                  <td key={id} title={x ? (x.fired ? `${x.detail}${id !== 'D' && !r?.promo?.[id] ? ' (관찰: 가상 거래만)' : ''}` : x.reason || x.detail) : id === 'D' ? '갭 후보만 판정' : '데이터 부족'}>
+                    <i className={`lamp ${x?.fired ? (id === 'D' || r?.promo?.[id] ? 'on' : 'shadow') : x?.reason ? 'na' : ''}`}>{id}</i>
                   </td>
                 );
               })}
               <td className={`mv ${t.expMovePct == null ? '' : t.expMovePct >= (market.rules?.minTargetPct ?? 2) ? 'ok' : 'low'}`} title="5분봉 ATR% × √보유봉수: 이 종목이 보유 시간 동안 움직일 것으로 보는 폭. 목표 이상이어야 진입">{t.expMovePct == null ? '-' : `${t.expMovePct.toFixed(1)}%`}</td>
+              <td className="cand-l" title={(r?.cands || []).filter((c) => c.fired).map((c) => `${c.id} ${c.detail}${c.promoted ? ' (승격: 매수 신호)' : ' (관찰: 가상 거래만)'}`).join('\n') || '후보 전략 신호 없음'}>
+                {(r?.cands || []).filter((c) => c.fired).map((c) => (
+                  <i key={c.id} className={`lamp sm ${c.promoted ? 'on' : 'shadow'}`}>{c.id}</i>
+                ))}
+              </td>
               <td className={`mv ${t.rvol == null ? '' : t.rvol >= (market.rules?.rvolMinEntry ?? 1.5) ? 'ok' : 'low'}`} title="상대 거래량 (평소 이 시각 대비)">{t.rvol == null ? '-' : `${t.rvol}x`}</td>
               <td className="st">{r?.fired ? '매수 신호' : r?.pending ? r.pending : r ? '대기' : '판정 전'}</td>
             </tr>
@@ -1018,7 +1344,7 @@ function KellyCard({ k }) {
         <tbody>
           {(k.kellies || []).map((x) => (
             <tr key={x.id} className={x.id === best.id ? 'best' : ''}>
-              <td>{x.id} {STRATEGIES[x.id].name}</td>
+              <td>{x.id} {ALL_STRATEGIES[x.id]?.name || ''}</td>
               <td>승률 {Math.round(x.win * 100)}%</td>
               <td>손익비 {x.payoff}</td>
               <td style={{ color: x.f > 0 ? UP : DOWN }}>f* {pctS(x.f)}</td>
@@ -1033,7 +1359,7 @@ function KellyCard({ k }) {
       </p>
       {negative ? (
         <p className="kelly-q">
-          <b style={{ color: DOWN }}>0 이하 → 매수 안 함.</b> 손익비 {best.payoff}이면 승률이 {best.payoff ? `${Math.round((1 / (1 + best.payoff)) * 100)}%` : '-'} 이상이어야 기대값이 플러스예요.
+          <b style={{ color: DOWN }}>0 이하 → 매수 안 함.</b> 손익비 {best.payoff}이면 승률이 {best.payoff ? `${Math.round((1 / (1 + best.payoff)) * 100)}%` : '-'} 이상이어야 기대값 플러스
         </p>
       ) : (
         <p className="kelly-q">
@@ -1092,7 +1418,7 @@ function OfficePanel({ officeRef, bubbles, setBubbles, onPick, market, mode, con
     if (id) onPick(id);
   };
 
-  const tape = market.tickers.filter((t) => t.list !== 'ai' && t.price > 0).map((t) => {
+  const tape = market.tickers.filter((t) => t.list !== 'ai' && t.list !== 'shadow' && t.price > 0).map((t) => {
     const ch = t.prevClose ? t.price / t.prevClose - 1 : 0;
     return { name: t.name, price: usd(t.price), ch, s: pct(ch) };
   });
@@ -1108,7 +1434,7 @@ function OfficePanel({ officeRef, bubbles, setBubbles, onPick, market, mode, con
               {[0, 1].map((k) => (
                 <span key={k} className="led-run">
                   {mode !== 'open' && <span className="led-item">{mode === 'pre' ? '장 시작 전' : '장 마감'}</span>}
-                  {!tape.length && <span className="led-item">{offline ? '봇 서버 미연결 · 시세 없음' : market.tickers.length ? 'KIS 시세 수집 중' : '관심 종목 없음 · 종목을 추가해주세요'}</span>}
+                  {!tape.length && <span className="led-item">{offline ? '봇 서버 미연결 · 시세 없음' : market.tickers.length ? 'KIS 시세 수집 중' : '관심 종목 없음 · 종목 추가 필요'}</span>}
                   {tape.map((x) => (
                     <span key={x.name + k} className="led-item">
                       {x.name} <b>{x.price}</b> <em style={{ color: tone(x.ch) }}>{x.ch > 0 ? '▲' : x.ch < 0 ? '▼' : '-'}{x.s.replace(/[+-]/, '')}</em>
@@ -1239,10 +1565,61 @@ function EquityChart({ data, base }) {
   return <canvas ref={ref} width={w} height={h} className="px-chart" aria-label="평가금액 추이" />;
 }
 
+// 차트 창: 5분봉(실시간, 봇이 받은 봉) · 일봉 · 월봉(KIS 기간별시세, 5분마다 갱신)
+function ChartPanel({ sel, live }) {
+  const [period, setPeriod] = useState('5m');
+  const [data, setData] = useState({}); // key → {bars, at, err}
+  const key = sel ? `${sel.code}:${period}` : null;
+  useEffect(() => {
+    if (!sel || !live || period === '5m') return undefined;
+    let stop = false;
+    const load = () =>
+      api(`/api/kis/bars?symbol=${sel.code}&exchange=${sel.exchange || 'NAS'}&period=${period}&count=90`, { ms: 15000 })
+        .then((d) => !stop && setData((x) => ({ ...x, [key]: { bars: d.bars.map((b) => ({ o: b.o, h: b.h, l: b.l, c: b.c, v: b.v, time: b.date })), at: Date.now() } })))
+        .catch((e) => !stop && setData((x) => ({ ...x, [key]: { ...(x[key] || {}), err: e.message } })));
+    load();
+    const id = setInterval(load, 5 * 60_000);
+    return () => {
+      stop = true;
+      clearInterval(id);
+    };
+  }, [key, live]);
+  const d = key ? data[key] : null;
+  const bars = period === '5m' ? null : d?.bars;
+  const has = sel && (period === '5m' ? sel.candles.length : bars?.length);
+  const label = { '5m': '5분봉', D: '일봉', M: '월봉' }[period];
+  const last = bars?.[bars.length - 1];
+  const first = bars?.[0];
+  return (
+    <section className="win chart-win">
+      <h2 className="win-title">{sel ? sel.name : '차트'} {label} <span className="dim">KIS</span></h2>
+      <div className="wl-tabs chart-tabs" role="tablist" aria-label="차트 주기">
+        {[['5m', '5분봉'], ['D', '일봉'], ['M', '월봉']].map(([k, l]) => (
+          <button key={k} type="button" role="tab" aria-selected={period === k} className={period === k ? 'on' : ''} onClick={() => setPeriod(k)}>{l}</button>
+        ))}
+      </div>
+      {has ? (
+        <>
+          <CandleChart t={sel} live bars={bars} period={period} n={period === '5m' ? Math.min(90, Math.max(20, sel.candles.length + 1)) : Math.min(90, Math.max(20, bars.length))} />
+          <div className="chart-foot">
+            <span>현재가 <b style={{ color: tone(sel.price - (sel.prevClose || sel.open)) }}>{usd(sel.price)}</b></span>
+            {period !== '5m' && first && last && <span className="dim">{period === 'M' ? `${first.time.slice(0, 7)} ~ ${last.time.slice(0, 7)}` : `${first.time} ~ ${last.time}`} · 기간 {pct(last.c / first.o - 1)}</span>}
+            <span><i className="sw sw-ma" />{period === '5m' ? '5봉' : period === 'M' ? '5개월' : '5일'} 평균</span>
+          </div>
+        </>
+      ) : (
+        <p className="wl-empty">{!sel ? EMPTY_MSG : d?.err ? `${label} 조회 실패: ${d.err}` : `${sel.name} ${label} 받는 중`}</p>
+      )}
+    </section>
+  );
+}
+
 // 5분봉 + 한투 스타일 툴팁: PC는 마우스 호버, 모바일은 길게 누르기
-function CandleChart({ t, clock, live }) {
-  const w = 168, h = 72;
-  const cs = [...t.candles.slice(-41), t.cur].filter(Boolean);
+function CandleChart({ t, clock, live, bars, period = '5m', n = 90 }) {
+  const w = 364, h = 96; // 화면 폭은 고정, 봉이 적으면 봉 간격을 넓힌다
+  const cs = bars ? bars.slice(-n) : [...t.candles.slice(-n), t.cur].filter(Boolean);
+  const step = Math.max(4, Math.floor((w - 4) / Math.max(1, cs.length)));
+  const bw = Math.max(3, step - Math.max(1, Math.round(step / 4))); // 몸통 폭
   const [hov, setHov] = useState(null);
   const press = useRef({ timer: null, active: false, x: 0, y: 0 });
   const wrapRef = useRef(null);
@@ -1256,14 +1633,14 @@ function CandleChart({ t, clock, live }) {
       ctx.fillStyle = '#2b2d31';
       for (let y = 8; y < h; y += 16) for (let x = 0; x < w; x += 3) ctx.fillRect(x, y, 1, 1);
       cs.forEach((k, i) => {
-        const x = i * 4 + 2;
+        const x = i * step + 2;
         const up = k.c >= k.o;
         ctx.fillStyle = up ? UP : DOWN;
         if (hov != null && i !== hov) ctx.globalAlpha = 0.45;
-        ctx.fillRect(x + 1, yOf(k.h), 1, yOf(k.l) - yOf(k.h) + 1);
+        ctx.fillRect(x + Math.floor(bw / 2), yOf(k.h), 1, yOf(k.l) - yOf(k.h) + 1);
         const top = yOf(Math.max(k.o, k.c));
         const bot = yOf(Math.min(k.o, k.c));
-        ctx.fillRect(x, top, 3, Math.max(1, bot - top + 1));
+        ctx.fillRect(x, top, bw, Math.max(1, bot - top + 1));
         ctx.globalAlpha = 1;
       });
       const c = cs.map((k) => k.c);
@@ -1271,18 +1648,18 @@ function CandleChart({ t, clock, live }) {
       c.forEach((_, i) => {
         if (i < 4) return;
         const v = c.slice(i - 4, i + 1).reduce((a, b) => a + b, 0) / 5;
-        ctx.fillRect(i * 4 + 3, yOf(v), 2, 1);
+        ctx.fillRect(i * step + 2 + Math.floor(bw / 2) - 1, yOf(v), 2, 1);
       });
       if (hov != null && cs[hov]) {
         // 십자선: 세로선 + 종가 가로선
         ctx.fillStyle = 'rgba(239,230,210,.55)';
-        const cx = hov * 4 + 3;
+        const cx = hov * step + 2 + Math.floor(bw / 2);
         for (let y = 0; y < h; y += 2) ctx.fillRect(cx, y, 1, 1);
         const cy = yOf(cs[hov].c);
         for (let x = 0; x < w; x += 2) ctx.fillRect(x, cy, 1, 1);
       }
     },
-    [t.code, t.price, t.candles.length, hov],
+    [t.code, t.price, cs.length, cs[cs.length - 1]?.c, hov, period],
     w,
     h
   );
@@ -1290,7 +1667,7 @@ function CandleChart({ t, clock, live }) {
   const idxAt = (clientX) => {
     const r = ref.current.getBoundingClientRect();
     const x = ((clientX - r.left) / r.width) * w;
-    return Math.max(0, Math.min(cs.length - 1, Math.floor((x - 2) / 4)));
+    return Math.max(0, Math.min(cs.length - 1, Math.floor((x - 2) / step)));
   };
 
   // 터치: 0.35초 길게 누르면 툴팁, 누른 채로 좌우로 움직이면 따라감, 떼면 사라짐
@@ -1344,7 +1721,9 @@ function CandleChart({ t, clock, live }) {
   if (k) {
     const isCur = k === t.cur;
     let when;
-    if (k.time) when = k.time.slice(5).replace('-', '/'); // MM/DD HH:MM (ET)
+    if (period === 'M' && k.time) when = k.time.slice(0, 7).replace('-', '/'); // YYYY/MM
+    else if (period === 'D' && k.time) when = k.time.replace(/-/g, '/'); // YYYY/MM/DD
+    else if (k.time) when = k.time.slice(5).replace('-', '/'); // MM/DD HH:MM (ET)
     else {
       const end = Math.floor((clock ?? 0) / 5) * 5;
       const mm = ((end - (cs.length - 1 - hov) * 5) % 1440 + 1440) % 1440;
@@ -1352,12 +1731,12 @@ function CandleChart({ t, clock, live }) {
     }
     const prev = hov > 0 ? cs[hov - 1].c : t.prevClose || k.o;
     const ch = prev ? k.c / prev - 1 : 0;
-    const leftSide = (hov * 4 + 3) / w > 0.55;
+    const leftSide = (hov * step + 3) / w > 0.55;
     tip = (
-      <div className={`ctip ${leftSide ? 'l' : 'r'}`} style={{ [leftSide ? 'right' : 'left']: `${leftSide ? 100 - ((hov * 4 + 1) / w) * 100 : ((hov * 4 + 6) / w) * 100}%` }} role="status">
+      <div className={`ctip ${leftSide ? 'l' : 'r'}`} style={{ [leftSide ? 'right' : 'left']: `${leftSide ? 100 - ((hov * step + 1) / w) * 100 : ((hov * step + bw + 3) / w) * 100}%` }} role="status">
         <div className="ctip-h">
           {when}
-          <small>{isCur ? '진행 중' : k.time ? 'ET' : 'ET · 모의'}</small>
+          <small>{period !== '5m' ? (hov === cs.length - 1 ? '진행 중' : period === 'M' ? '월봉' : '일봉') : isCur ? '진행 중' : k.time ? 'ET' : 'ET · 모의'}</small>
         </div>
         <dl>
           <dt>시가</dt><dd>{usd(k.o)}</dd>
@@ -1432,11 +1811,11 @@ function TokenMonitor({ live, llm, onPick, avatars }) {
         AI 토큰 사용량 <span className="dim">Claude·Gemini 실제 응답의 usage 기준</span>
       </h2>
       {!live ? (
-        <p className="wl-empty">봇 서버에 연결되면 실제 호출 기록이 표시됩니다.</p>
+        <p className="wl-empty">봇 서버 연결 후 호출 기록 표시</p>
       ) : (
         <>
           <p className="tok-note">
-            {llm?.ready ? `AI 사용 중 · 노아·아브라함 결재와 다윗 탐색 요약에서만 호출합니다.` : 'AI 꺼짐: .env에 ANTHROPIC_API_KEY 또는 GEMINI_API_KEY가 없거나 LLM_ENABLED=false. 매매는 규칙 기반으로만 동작합니다.'}
+            {llm?.ready ? `AI 사용 중 · 노아 위험 점검·사무엘 뉴스·다윗 탐색 요약에서 호출` : 'AI 꺼짐 (.env 키 없음 또는 LLM_ENABLED=false) · 규칙 기반으로만 매매'}
           </p>
           <div className="tok-sum">
             <div><small>호출</small><b>{sum.calls.toLocaleString()}회</b></div>
@@ -1495,7 +1874,7 @@ function TokenMonitor({ live, llm, onPick, avatars }) {
               </tbody>
             </table>
           )}
-          <p className="tok-note tok-real-note">비용은 서버 단가표(server/llm/pricing.js) 기준 추정 청구액이에요. 캐시·배치 할인은 반영하지 않습니다.</p>
+          <p className="tok-note tok-real-note">비용: 서버 단가표(server/llm/pricing.js) 기준 추정 · 캐시·배치 할인 미반영</p>
         </>
       )}
     </section>
@@ -1546,7 +1925,7 @@ function NewsFeed({ live, mine, onSelect }) {
         ))}
       </div>
       <div className="news-list" role="log" aria-live="polite">
-        {!live ? <p className="empty">봇 서버에 연결되면 뉴스가 올라옵니다.</p> : err ? <p className="empty">뉴스를 불러오지 못했어요: {err}</p> : !items.length ? <p className="empty">{tab === 'mine' ? '관심·보유 종목 관련 뉴스가 아직 없어요.' : '뉴스 수집 중이에요 (3분마다 갱신).'}</p> : null}
+        {!live ? <p className="empty">봇 서버 연결 후 표시</p> : err ? <p className="empty">뉴스 조회 실패: {err}</p> : !items.length ? <p className="empty">{tab === 'mine' ? '관심·보유 종목 뉴스 없음' : '뉴스 수집 중 (3분마다)'}</p> : null}
         {items.map((n, i) => (
           <div key={`${n.title}-${i}`} className={`news-item ${n.tone}`}>
             <span className="time">{when(n)}</span>
@@ -1570,6 +1949,226 @@ function NewsFeed({ live, mine, onSelect }) {
 }
 
 // ---------------- 손익 캘린더 ----------------
+// ---------------- 가상 탭 ----------------
+const NY_TODAY = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+const pctS = (v, d = 2) => {
+  if (v == null || !Number.isFinite(v)) return '-';
+  const r = +v.toFixed(d);
+  return `${r > 0 ? '+' : ''}${(r === 0 ? 0 : r).toFixed(d)}%`;
+};
+// 하루(또는 기간) 집계 → 순위 [{k, n, avg, wins}]
+const rankOf = (maps) => {
+  const acc = {};
+  for (const m of maps) for (const [k, x] of Object.entries(m || {})) {
+    const a = (acc[k] ||= { k, n: 0, sum: 0, wins: 0, days: 0, top: 0 });
+    a.n += x.n;
+    a.sum += x.sum;
+    a.wins += x.wins;
+    a.days++;
+  }
+  return Object.values(acc).map((a) => ({ ...a, avg: a.sum / a.n })).sort((a, b) => b.avg - a.avg || b.n - a.n);
+};
+
+// 장세 표시
+const rgTag = (q) => (q ? [q.dir, q.trend === '추세' || q.trend === '횡보' ? q.trend : null, q.vol === '높음' ? '변동↑' : q.vol === '낮음' ? '변동↓' : null].filter(Boolean).join('·') : '');
+const rgColor = (q) => (q?.dir === '강세' ? UP : q?.dir === '약세' ? DOWN : 'var(--dim)');
+function RegimeLine({ rg }) {
+  if (!rg?.qqq && !rg?.breadth) return <span className="dim">장세 기록 없음</span>;
+  const q = rg.qqq;
+  const b = rg.breadth;
+  return (
+    <span className="rg-line">
+      {q && <><b style={{ color: rgColor(q) }}>QQQ {pctS(q.chgPct, 1)} {rgTag(q)}</b> · 갭 {pctS(q.gapPct, 1)} · 변동폭 {q.rangePct}%{q.rangeRatio != null ? ` (평소 ×${q.rangeRatio})` : ''}</>}
+      {b && <> · SPY {pctS(b.spy, 1)} · IWM {pctS(b.iwm, 1)}{b.qqqIwm != null ? ` (QQQ−IWM ${b.qqqIwm > 0 ? '+' : ''}${b.qqqIwm}%p)` : ''} · 섹터 {b.sectorsUp ?? '-'}/{b.sectorsN || 11}↑ · RSP−SPY {b.rspSpy == null ? '-' : `${b.rspSpy > 0 ? '+' : ''}${b.rspSpy}%p`} · VIXY {pctS(b.vixy, 1)}</>}
+    </span>
+  );
+}
+
+function ShadowSummary({ shadows, promo, rules, regime }) {
+  const today = NY_TODAY();
+  const recent = (shadows?.recent || []).filter((x) => x.closedAt && new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(x.closedAt)) === today);
+  const m = {};
+  for (const x of recent) {
+    const k = `${(x.strategies || []).join('+')}${x.profile ? `·${x.profile}` : ''}`;
+    const a = (m[k] ||= { n: 0, sum: 0, wins: 0 });
+    a.n++;
+    a.sum += x.pnlPct || 0;
+  }
+  const best = rankOf([m])[0];
+  const R = rules || {};
+  const minT = R.promoteMin ?? 40;
+  const minD = R.promoteDays ?? 15;
+  let near = null;
+  for (const p of Object.values(promo || {})) {
+    if (p.status === 'promoted' || p.status === 'regime') continue;
+    for (const [pid, x] of Object.entries(p.profiles || {})) {
+      if (!((x.expectancyPct ?? -1) > 0)) continue;
+      const prog = Math.min(1, x.trades / minT) + Math.min(1, (x.days || 0) / minD);
+      if (!near || prog > near.prog) near = { k: `${p.id}·${pid}`, x, prog };
+    }
+  }
+  const promoted = Object.values(promo || {}).filter((p) => p.status === 'promoted' || p.status === 'regime');
+  return (
+    <div className="sh-sum">
+      <span className="rg-now">오늘 장세 <RegimeLine rg={regime} /></span>
+      <span>진행 <b>{shadows?.open?.length ?? 0}</b></span>
+      <span>오늘 청산 <b>{recent.length}</b></span>
+      <span>오늘 1등 <b>{best ? `${best.k} ${pctS(best.avg, 1)}` : '-'}</b></span>
+      <span>{promoted.length ? <>승격 <b style={{ color: 'var(--mint)' }}>{promoted.map((p) => `${p.id}·${p.profile}`).join(' ')}</b></> : <>승격 근접 <b>{near ? `${near.k} ${near.x.trades}/${minT}건 · ${near.x.days || 0}/${minD}일` : '없음'}</b></>}</span>
+    </div>
+  );
+}
+
+function ShadowCalendar({ live }) {
+  const [month, setMonth] = useState(() => NY_TODAY().slice(0, 7));
+  const [data, setData] = useState(null);
+  const [mode, setMode] = useState('day');
+  const [sel, setSel] = useState(null);
+  useEffect(() => {
+    if (!live) return undefined;
+    let stop = false;
+    const load = () => api(`/api/bot/shadowcal?month=${month}`).then((d) => !stop && setData(d)).catch(() => null);
+    load();
+    const id = setInterval(load, 5 * 60_000);
+    return () => {
+      stop = true;
+      clearInterval(id);
+    };
+  }, [live, month]);
+  const shift = (k) => {
+    const [y0, m0] = month.split('-').map(Number);
+    setMonth(new Date(Date.UTC(y0, m0 - 1 + k, 1)).toISOString().slice(0, 7));
+    setSel(null);
+  };
+  const [y, mo] = month.split('-').map(Number);
+  const first = new Date(Date.UTC(y, mo - 1, 1)).getUTCDay();
+  const nDays = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  const days = data?.days || {};
+  const rgs = data?.regime || {};
+  const cells = [...Array(first).fill(null), ...Array.from({ length: nDays }, (_, i) => `${month}-${String(i + 1).padStart(2, '0')}`)];
+  const today = NY_TODAY();
+  const bestOf = (k) => rankOf([days[k]])[0];
+  // 주: 달력 줄(일~토) 단위
+  const weeks = [];
+  for (let i = 0; i < cells.length; i += 7) {
+    const ks = cells.slice(i, i + 7).filter((k) => k && days[k]);
+    if (!cells.slice(i, i + 7).some(Boolean)) continue;
+    const r = rankOf(ks.map((k) => days[k]));
+    const lo = cells.slice(i, i + 7).find(Boolean);
+    const hi = [...cells.slice(i, i + 7)].reverse().find(Boolean);
+    const cnt = { 강세: 0, 보합: 0, 약세: 0 };
+    for (const k of cells.slice(i, i + 7)) if (k && rgs[k]?.qqq) cnt[rgs[k].qqq.dir]++;
+    weeks.push({ label: `${+lo.slice(5, 7)}/${+lo.slice(8)}~${+hi.slice(8)}`, r, plus: r.filter((x) => x.avg > 0).length, rg: Object.entries(cnt).filter(([, n]) => n).map(([d, n]) => `${d[0]}${n}`).join(' ') });
+  }
+  // 월: 전체 집계 + 1등 횟수
+  const monthRank = rankOf(Object.values(days));
+  for (const k of Object.keys(days)) {
+    const b = bestOf(k);
+    const m = b && monthRank.find((x) => x.k === b.k);
+    if (m) m.top++;
+  }
+  // 장세별 평균: 그날 QQQ 방향으로 나눔
+  const byDir = {};
+  for (const [k, m] of Object.entries(days)) {
+    const d = rgs[k]?.qqq?.dir;
+    if (!d) continue;
+    for (const [key, x] of Object.entries(m)) {
+      const a = ((byDir[key] ||= {})[d] ||= { n: 0, sum: 0 });
+      a.n += x.n;
+      a.sum += x.sum;
+    }
+  }
+  const dirCell = (key, d) => {
+    const a = byDir[key]?.[d];
+    return a ? <><span style={{ color: tone(a.sum / a.n) }}>{pctS(a.sum / a.n, 1)}</span> <small className="dim">{a.n}</small></> : '-';
+  };
+  const monthSorted = [...monthRank].sort((a, b) => (b.n >= 5) - (a.n >= 5) || b.avg - a.avg);
+  const detail = sel && days[sel] ? rankOf([days[sel]]) : null;
+  const empty = !Object.keys(days).length;
+  return (
+    <section className="win cal-win sh-cal">
+      <h2 className="win-title">가상 캘린더 <span className="dim">뉴욕 거래일 · 전략·청산별</span></h2>
+      <div className="cal-head">
+        <button type="button" onClick={() => shift(-1)} aria-label="이전 달">◀</button>
+        <b>{y}년 {mo}월</b>
+        <button type="button" onClick={() => shift(1)} aria-label="다음 달" disabled={month >= today.slice(0, 7)}>▶</button>
+        <span className="cal-mode">
+          {[['day', '일'], ['week', '주'], ['month', '월']].map(([k, l]) => (
+            <button key={k} type="button" className={mode === k ? 'on' : ''} onClick={() => setMode(k)}>{l}</button>
+          ))}
+        </span>
+      </div>
+      {mode === 'day' && (
+        <>
+          <div className="cal-grid" role="grid" aria-label={`${y}년 ${mo}월 가상 1등`}>
+            {['일', '월', '화', '수', '목', '금', '토'].map((w, i) => (
+              <div key={w} className={`cal-w ${i === 0 ? 'sun' : i === 6 ? 'sat' : ''}`}>{w}</div>
+            ))}
+            {cells.map((k, i) => {
+              if (!k) return <div key={`e${i}`} className="cal-d empty" />;
+              const b = bestOf(k);
+              const a = b ? Math.min(1, Math.abs(b.avg) / 4) : 0;
+              const bg = !b || b.avg === 0 ? undefined : b.avg > 0 ? `rgba(255,90,90,${0.12 + a * 0.45})` : `rgba(77,166,255,${0.12 + a * 0.45})`;
+              return (
+                <button key={k} type="button" role="gridcell" className={`cal-d ${k === today ? 'today' : ''} ${k === sel ? 'sel' : ''}`} style={{ background: bg }} onClick={() => setSel(k === sel ? null : k)} title={b ? `${k} 1등 ${b.k} ${pctS(b.avg)} (${b.n}건)` : k}>
+                  <span className="n">{+k.slice(8)}</span>
+                  {rgs[k]?.qqq && <span className="rg-dot" style={{ color: rgColor(rgs[k].qqq) }} title={`QQQ ${pctS(rgs[k].qqq.chgPct, 1)} ${rgTag(rgs[k].qqq)}`}>{rgs[k].qqq.dir[0]}</span>}
+                  {b && <span className="v">{b.k}</span>}
+                  {b && <span className="p">{pctS(b.avg, 1)} <small>{b.n}건</small></span>}
+                </button>
+              );
+            })}
+          </div>
+          {sel && <p className="cal-detail"><b>{sel}</b> <RegimeLine rg={rgs[sel]} /></p>}
+          {detail && (
+            <table className="stats sh-rank">
+              <caption>{sel} 순위</caption>
+              <thead><tr><th>#</th><th>전략·청산</th><th>건수</th><th>승</th><th>평균</th></tr></thead>
+              <tbody>
+                {detail.map((x, i) => (
+                  <tr key={x.k}><td>{i + 1}</td><td>{x.k}</td><td>{x.n}</td><td>{x.wins}</td><td style={{ color: tone(x.avg) }}>{pctS(x.avg)}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <p className="mj-legend">재미용 · 하루 표본은 1~3건이라 운이 큼 · 날짜 누르면 장세와 전체 순위 · 모서리 글자 = 그날 QQQ (강세/약세/보합)</p>
+        </>
+      )}
+      {mode === 'week' && (
+        empty ? <p className="wl-empty">이번 달 가상 청산 없음</p> : (
+          <table className="stats sh-rank">
+            <thead><tr><th>주</th><th>1등</th><th>2등</th><th className="m-hide">3등</th><th>플러스</th><th>장세</th></tr></thead>
+            <tbody>
+              {weeks.map((w) => (
+                <tr key={w.label}>
+                  <td>{w.label}</td>
+                  {[0, 1, 2].map((i) => <td key={i} className={i === 2 ? 'm-hide' : undefined}>{w.r[i] ? <>{w.r[i].k} <span style={{ color: tone(w.r[i].avg) }}>{pctS(w.r[i].avg, 1)}</span> <small className="dim">{w.r[i].n}</small></> : '-'}</td>)}
+                  <td>{w.r.length ? `${w.plus}/${w.r.length}` : '-'}</td>
+                  <td className="dim">{w.rg || '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )
+      )}
+      {mode === 'week' && <p className="mj-legend">흐름 파악용 · 매매 설정은 바꾸지 않음 · 작은 숫자 = 건수</p>}
+      {mode === 'month' && (
+        empty ? <p className="wl-empty">이번 달 가상 청산 없음</p> : (
+          <table className="stats sh-rank">
+            <thead><tr><th>전략·청산</th><th>건수</th><th className="m-hide">거래일</th><th className="m-hide">승률</th><th>평균</th><th>강세</th><th>보합</th><th>약세</th><th className="m-hide">1등</th></tr></thead>
+            <tbody>
+              {monthSorted.map((x) => (
+                <tr key={x.k} className={x.n < 5 ? 'dim' : ''}><td>{x.k}</td><td>{x.n}</td><td className="m-hide">{x.days}</td><td className="m-hide">{Math.round((x.wins / x.n) * 100)}%</td><td style={{ color: tone(x.avg) }}>{pctS(x.avg)}</td><td>{dirCell(x.k, '강세')}</td><td>{dirCell(x.k, '보합')}</td><td>{dirCell(x.k, '약세')}</td><td className="m-hide">{x.top || ''}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        )
+      )}
+      {mode === 'month' && <p className="mj-legend">승격 판단용 · 실제 승격은 아래 전략 승격 표 기준 (최근 80건) · 강세/보합/약세 = 그날 QQQ 방향별 평균 (작은 숫자 = 건수) · 5건 미만은 흐리게</p>}
+    </section>
+  );
+}
+
 function PnlCalendar({ live, env }) {
   const nyMonth = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()).slice(0, 7);
   const [month, setMonth] = useState(nyMonth);
@@ -1648,7 +2247,7 @@ function PnlCalendar({ live, env }) {
           <b>{sel}</b> 평가금액 {s.equity != null ? usd(s.equity) : '-'} (전 거래일 {s.base != null ? usd(s.base) : '-'}) · 손익 <b style={{ color: tone(s.pnl) }}>{money(s.pnl) || '-'}{s.pnlPct != null ? ` (${s.pnlPct > 0 ? '+' : ''}${s.pnlPct}%)` : ''}</b> · 실현 <b style={{ color: tone(s.realized) }}>{money(s.realized) || '-'}</b> · 청산 {s.trades}건 (승 {s.wins})
         </p>
       )}
-      <p className="mj-legend">{data?.note || '봇이 계좌를 조회한 날부터 기록됩니다.'} 빨강 = 이익, 파랑 = 손실.</p>
+      <p className="mj-legend">{data?.note || '봇이 계좌를 조회한 날부터 기록'} · 빨강 이익 / 파랑 손실</p>
     </section>
   );
 }
@@ -1668,12 +2267,8 @@ function Messenger({ messages, avatars, onPick, offline }) {
   return (
     <section className="win msg-win">
       <h2 className="win-title">사내 메신저 <span className="dim">#트레이딩룸</span></h2>
-      <div className="msg-ro">
-        <span className="ro-badge">읽기 전용</span>
-        <span className="dim">서버 봇이 실제로 한 일(신호, 결재, 주문, 체결, 손절)만 기록됩니다. 연출용 대사는 없습니다.</span>
-      </div>
       <div className="msg-list" ref={listRef} onScroll={onScroll} aria-live="polite" role="log">
-        {messages.length === 0 && <p className="empty">{offline ? '봇 서버에 연결되면 실제 이벤트(신호, 결재, 주문, 체결, 손절)가 여기에 올라옵니다.' : '아직 봇 이벤트가 없어요.'}</p>}
+        {messages.length === 0 && <p className="empty">{offline ? '봇 서버 연결 후 신호·결재·주문·체결·손절 표시' : '봇 이벤트 없음'}</p>}
         {messages.map((m) => {
           if (m.sys)
             return (
@@ -1730,7 +2325,7 @@ function OverridePanel({ applied, onApply, onLiquidate, mode, hasPos, market, on
   return (
     <section className="win ovr">
       <h2 className="win-title">전략 & 오버라이드</h2>
-      <p className="ovr-lead">수동 제어 중에는 봇이 신규 매수를 하지 않고(신호만 기록), 보유 종목은 아래 고정 손절·익절선으로 서버가 매도합니다.</p>
+      <p className="ovr-lead">수동 제어: 신규 매수 안 함(신호만 기록) · 보유 종목은 아래 손절·익절선으로 서버가 매도</p>
       <ManualOrder market={market} mode={mode} onOrder={onOrder} />
 
       <div className="ovr-group">
@@ -1740,11 +2335,11 @@ function OverridePanel({ applied, onApply, onLiquidate, mode, hasPos, market, on
           <span className="box" />
           <span>
             <b>신규 매수 전면 중단</b>
-            <small>AI 모드로 돌아가도 해제 전까지 매수하지 않습니다</small>
+            <small>AI 모드로 돌아가도 해제 전까지 매수 안 함</small>
           </span>
         </label>
         <div className="grid2">
-          <Stepper label="종목당 최대 비중" value={draft.maxW} onChange={up('maxW')} step={1} min={1} max={50} fmt={(v) => `${v}%`} />
+          <Stepper label="종목당 최대 비중" value={draft.maxW} onChange={up('maxW')} step={5} min={5} max={100} fmt={(v) => `${v}%`} />
           <Stepper label="마감 전 매수 금지" value={draft.noEntryLastMin} onChange={up('noEntryLastMin')} step={5} min={0} max={120} fmt={(v) => `${v}분`} />
           <Stepper label="방주 QQQ 하락 기준" value={draft.arkDropPct} onChange={up('arkDropPct')} step={0.1} min={0.3} max={10} fmt={(v) => `-${v.toFixed(1)}%`} />
         </div>
@@ -1760,27 +2355,34 @@ function OverridePanel({ applied, onApply, onLiquidate, mode, hasPos, market, on
           <Stepper label="보유 예정 시간" value={draft.holdBars} onChange={up('holdBars')} step={3} min={3} max={78} fmt={(v) => `${v * 5}분`} />
           <Stepper label="매매 수수료(편도)" value={draft.feePct} onChange={up('feePct')} step={0.01} min={0} max={2} fmt={(v) => `${v.toFixed(2)}%`} />
         </div>
-        <p className="dim ovr-note">5분봉 ATR% × √(보유 봉 수)가 목표 수익 이상인 종목만 진입합니다. 목표에 닿으면 트레일링 익절을 시작하고, 스톱은 평단 + 왕복 비용 아래로 내려가지 않아요. 보유 시간의 2배가 지나도 비용을 못 넘기면 정리합니다.</p>
-        <label className={`halt ${draft.confluenceBuy ? 'on' : ''}`}>
-          <input type="checkbox" checked={!!draft.confluenceBuy} onChange={(e) => up('confluenceBuy')(e.target.checked)} />
-          <span className="box" />
-          <span>
-            <b>A·B·C 중 {draft.confluenceMin ?? 2}개 이상 동시 신호면 켈리·AI 결재 없이 매수</b>
-            <small>총 평가금액의 {draft.confluencePct ?? 10}%(종목당 한도 안), 0주면 1주. 셧다운·보유 한도·위험 상품·거래대금·변동폭 필터는 그대로 적용</small>
-          </span>
-        </label>
-        <div className="grid2">
-          <Stepper label="동시 신호 매수 비중" value={draft.confluencePct ?? 10} onChange={up('confluencePct')} step={1} min={1} max={50} fmt={(v) => `${v}%`} />
-          <Stepper label="동시 신호 개수" value={draft.confluenceMin ?? 2} onChange={up('confluenceMin')} step={1} min={2} max={3} fmt={(v) => `${v}개 이상`} />
+        <p className="dim ovr-note">ATR% × √보유 봉 수 ≥ 목표 수익인 종목만 진입 · 목표 도달 후 추적 익절(평단+비용 아래로 안 내림) · 보유 시간 2배 지나도 비용 못 넘으면 정리</p>
+        <h3 className="sub">매수 수량</h3>
+        <div className="size-mode">
+          {[['tier', '예상 승률 단계 (소액용)'], ['fixed', '기존 방식 (10% 고정 → 켈리)']].map(([k, l]) => (
+            <button key={k} type="button" className={(draft.sizeMode || 'tier') === k ? 'on' : ''} onClick={() => up('sizeMode')(k)}>{l}</button>
+          ))}
         </div>
-        <label className={`halt ${draft.probeInDemo ? 'on' : ''}`}>
-          <input type="checkbox" checked={draft.probeInDemo} onChange={(e) => up('probeInDemo')(e.target.checked)} />
-          <span className="box" />
-          <span>
-            <b>모의투자 표본 수집 (${draft.probeUsd})</b>
-            <small>비용 후 기대값이 0 이하여도 모의투자에서만 소액 진입해 실제 승률을 모읍니다. 실전에서는 동작하지 않음</small>
-          </span>
-        </label>
+        {(draft.sizeMode || 'tier') === 'fixed' && (
+          <div className="grid2">
+            <Stepper label="종목당 고정 비중" value={draft.trackPct ?? 10} onChange={up('trackPct')} step={1} min={1} max={50} fmt={(v) => `${v}%`} />
+            <Stepper label="기존 방식 최대 비중" value={draft.fixedMaxW ?? 15} onChange={up('fixedMaxW')} step={1} min={1} max={100} fmt={(v) => `${v}%`} />
+          </div>
+        )}
+        <div className="grid2">
+          <Stepper label="자동으로 기존 방식 전환" value={draft.sizeTierUntilEquity ?? 0} onChange={up('sizeTierUntilEquity')} step={250} min={0} max={1e7} fmt={(v) => (v ? `계좌 $${v} 이상` : '끔')} />
+        </div>
+        <div className="grid2">
+          <Stepper label="검증 전 (표본 부족)" value={draft.sizeUnverifiedPct ?? 25} onChange={up('sizeUnverifiedPct')} step={1} min={1} max={100} fmt={(v) => `${v}%`} />
+          <Stepper label="본전 근처" value={draft.sizeLowPct ?? 15} onChange={up('sizeLowPct')} step={1} min={1} max={100} fmt={(v) => `${v}%`} />
+          <Stepper label={`보통 (본전 +${draft.sizeEdgeBase ?? 3}%p↑)`} value={draft.sizeBasePct ?? 33} onChange={up('sizeBasePct')} step={1} min={1} max={100} fmt={(v) => `${v}%`} color={UP} />
+          <Stepper label={`높음 (본전 +${draft.sizeEdgeHigh ?? 10}%p↑)`} value={draft.sizeHighPct ?? 45} onChange={up('sizeHighPct')} step={1} min={1} max={100} fmt={(v) => `${v}%`} color={UP} />
+          <Stepper label="보통 기준" value={draft.sizeEdgeBase ?? 3} onChange={up('sizeEdgeBase')} step={1} min={0} max={50} fmt={(v) => `+${v}%p`} />
+          <Stepper label="높음 기준" value={draft.sizeEdgeHigh ?? 10} onChange={up('sizeEdgeHigh')} step={1} min={0} max={50} fmt={(v) => `+${v}%p`} />
+          <Stepper label="검증에 필요한 표본" value={draft.sizeMinSamples ?? 20} onChange={up('sizeMinSamples')} step={5} min={0} max={500} fmt={(v) => `${v}건`} />
+          <Stepper label="켈리 전환 실거래" value={draft.minObservedForKelly ?? 20} onChange={up('minObservedForKelly')} step={5} min={0} max={200} fmt={(v) => `${v}건`} />
+          <Stepper label="켈리 전환 계좌" value={draft.kellyMinEquity ?? 2000} onChange={up('kellyMinEquity')} step={500} min={0} max={1e7} fmt={(v) => `$${v}`} />
+        </div>
+        <p className="dim ovr-note">예상 승률 = 가상 + 실거래(2배) · 본전 승률 = (손절+비용) ÷ (익절+손절) · 총 평가금액 기준, 종목당 최대 {draft.maxW}%, 0주면 1주 · 켈리 전환 조건 충족 시 하프 켈리</p>
       </div>
 
       <div className="ovr-group">
@@ -1788,6 +2390,12 @@ function OverridePanel({ applied, onApply, onLiquidate, mode, hasPos, market, on
         <div className="grid2">
           <Stepper label="탐색 RVol 하한" value={draft.rvolMin ?? 2} onChange={up('rvolMin')} step={0.5} min={0} max={20} fmt={(v) => (v ? `${v}배` : '끔')} />
           <Stepper label="매수 RVol 하한" value={draft.rvolMinEntry ?? 1.5} onChange={up('rvolMinEntry')} step={0.25} min={0} max={20} fmt={(v) => (v ? `${v}배` : '끔')} />
+          <Stepper label="승격 최소 가상 건수" value={draft.promoteMin ?? 40} onChange={up('promoteMin')} step={5} min={10} max={500} fmt={(v) => `${v}건`} />
+          <Stepper label="승격 기대값 하한" value={draft.promoteExp ?? 0.3} onChange={up('promoteExp')} step={0.1} min={0} max={5} fmt={(v) => `+${v.toFixed(1)}%`} color={UP} />
+          <Stepper label="승격 PF 하한" value={draft.promotePF ?? 1.3} onChange={up('promotePF')} step={0.1} min={1} max={5} fmt={(v) => v.toFixed(1)} />
+          <Stepper label="승격 최소 거래일" value={draft.promoteDays ?? 15} onChange={up('promoteDays')} step={1} min={1} max={60} fmt={(v) => `${v}일`} />
+          <Stepper label="은퇴 판단 최소 건수" value={draft.retireMin ?? 100} onChange={up('retireMin')} step={10} min={40} max={1000} fmt={(v) => `${v}건`} />
+          <Stepper label="은퇴 판단 최소 거래일" value={draft.retireDays ?? 30} onChange={up('retireDays')} step={5} min={5} max={250} fmt={(v) => `${v}일`} />
           <Stepper label="자동 끄기 판단 건수" value={draft.autoToggleMin ?? 30} onChange={up('autoToggleMin')} step={5} min={5} max={500} fmt={(v) => `${v}건`} />
         </div>
         <label className={`halt ${draft.newsCheck !== false ? 'on' : ''}`}>
@@ -1795,7 +2403,7 @@ function OverridePanel({ applied, onApply, onLiquidate, mode, hasPos, market, on
           <span className="box" />
           <span>
             <b>사무엘 뉴스 확인</b>
-            <small>매수 직전과 갭 후보 선정 때 Alpha Vantage(감성 점수)·야후·KIS 뉴스를 봅니다. 유상증자·공모·희석·역분할·상장폐지 같은 악재면 막고, 좋은 재료는 갭 후보 점수에 더합니다. 밀어서 사게 하지는 않습니다</small>
+            <small>매수 직전·갭 후보 선정 때 Alpha Vantage·야후·KIS 뉴스 확인 · 공모·유상증자·역분할·상장폐지 등 악재면 차단 · 좋은 재료는 갭 점수에만 가산</small>
           </span>
         </label>
       </div>
@@ -1807,7 +2415,7 @@ function OverridePanel({ applied, onApply, onLiquidate, mode, hasPos, market, on
           <span className="box" />
           <span>
             <b>장전 갭 스캔 (뉴욕 08:30~09:25, 10분마다)</b>
-            <small>상위 {draft.gapTopN ?? 5}개를 오늘의 후보로 두고 개장 후 시가 범위 돌파(D)만 봅니다. 실거래 {draft.minObservedForKelly ?? 20}건까지는 고정 비중 {draft.trackPct ?? 10}%, 이후 켈리</small>
+            <small>상위 {draft.gapTopN ?? 5}개를 오늘 후보로 · 개장 후 시가 범위 돌파(D) 감시 · D는 승격 없이 기본 매수</small>
           </span>
         </label>
         <div className="grid2">
@@ -1822,8 +2430,6 @@ function OverridePanel({ applied, onApply, onLiquidate, mode, hasPos, market, on
           <Stepper label="시가 범위" value={draft.orbBars ?? 3} onChange={up('orbBars')} step={1} min={1} max={6} fmt={(v) => `${v * 5}분`} />
           <Stepper label="진입 마감 (개장 후)" value={draft.orbEndMin ?? 90} onChange={up('orbEndMin')} step={15} min={20} max={390} fmt={(v) => `${v}분`} />
           <Stepper label="갭 후보 변동폭 상한" value={draft.gapMaxMovePct ?? 30} onChange={up('gapMaxMovePct')} step={1} min={5} max={100} fmt={(v) => `${v}%`} />
-          <Stepper label="트랙 1 고정 비중" value={draft.trackPct ?? 10} onChange={up('trackPct')} step={1} min={1} max={50} fmt={(v) => `${v}%`} />
-          <Stepper label="켈리 전환 건수" value={draft.minObservedForKelly ?? 20} onChange={up('minObservedForKelly')} step={5} min={0} max={200} fmt={(v) => `${v}건`} />
         </div>
       </div>
 
@@ -1838,7 +2444,7 @@ function OverridePanel({ applied, onApply, onLiquidate, mode, hasPos, market, on
           <span className="box" />
           <span>
             <b>셧다운 시 봇 포지션 청산</b>
-            <small>끄면 신규 매수만 멈추고 보유 종목은 모세가 계속 관리합니다</small>
+            <small>끄면 신규 매수만 중지 · 보유 종목은 모세가 계속 관리</small>
           </span>
         </label>
       </div>
@@ -1875,7 +2481,7 @@ function OverridePanel({ applied, onApply, onLiquidate, mode, hasPos, market, on
       <div className="ovr-foot">
         <button type="button" className="apply" disabled={!dirty} onClick={() => onApply(draft)}>{dirty ? '서버에 적용' : '적용됨'}</button>
         {dirty && <button type="button" className="ghost" onClick={() => setDraft(applied)}>되돌리기</button>}
-        <span className="ovr-status"><span className="dim">설정은 서버(data/bot-settings.json)에 저장돼 브라우저를 꺼도 유지됩니다.</span></span>
+        <span className="ovr-status"><span className="dim">설정은 서버(data/bot-settings.json)에 저장 · 브라우저를 꺼도 유지</span></span>
       </div>
     </section>
   );
@@ -1935,15 +2541,15 @@ function AgentModal({ id, onClose, officeRef, avatars, messages, reports, moses 
             <p>1) 강제 손절선: 평단 대비 설정값 이하면 즉시 손절 (모든 모드, AI 판단 없이).</p>
             <p>2) AI 모드: 실제 5분봉의 5·20봉 이평, MACD 히스토그램, RSI(14), 1호가 잔량 비율, QQQ 등락으로 하락 압력을 세고, 손실 폭과 겹치면 손절. 수익 1% 이상이면 고점 대비 트레일링 스톱(0.6~3%).</p>
             <p>3) 수동 모드: 사용자 고정 손절·익절선.</p>
-            <p className="dim">매도는 안심 체결 엔진이 체결을 확인하며, 미체결이면 취소 후 더 낮은 가격으로 다시 냅니다 (손절: -0.2% → -1% → -3%).</p>
+            <p className="dim">매도는 안심 체결 엔진이 체결 확인 · 미체결이면 취소 후 더 낮은 가격으로 재주문 (손절 −0.2% → −1% → −3%)</p>
           </details>
         )}
         <h3>최근 보고</h3>
-        <div className="report">{rep ? <Report r={rep} /> : <p className="dim">아직 이 에이전트의 실제 이벤트가 없어요.</p>}</div>
+        <div className="report">{rep ? <Report r={rep} /> : <p className="dim">이 에이전트 이벤트 없음</p>}</div>
 
         <h3>대화 로그</h3>
         <ul className="m-log">
-          {logs.length === 0 && <li className="dim">아직 남긴 메시지가 없어요.</li>}
+          {logs.length === 0 && <li className="dim">메시지 없음</li>}
           {logs.map((m) => (
             <li key={m.id}><span className="time">{m.time}</span>{m.text}</li>
           ))}
@@ -1962,7 +2568,7 @@ function Report({ r }) {
           <ul className="mj-list">
             {r.results.map((x) => (
               <li key={x.id}>
-                <div><b>{x.id} {STRATEGIES[x.id].name}</b> <span className={`mj ${x.fired ? 'mj-exit' : 'mj-calm'}`}>{x.fired ? '충족' : '미충족'}</span></div>
+                <div><b>{x.id} {ALL_STRATEGIES[x.id]?.name || ''}</b> <span className={`mj ${x.fired ? 'mj-exit' : 'mj-calm'}`}>{x.fired ? '충족' : '미충족'}</span></div>
                 <small>{x.fired ? x.detail : x.reason || x.detail}</small>
               </li>
             ))}

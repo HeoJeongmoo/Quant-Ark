@@ -323,11 +323,11 @@ export async function getProductInfo(client, symbol, exchange = 'NAS') {
  * 해외주식 기간별시세 [v1_해외주식-010]  GET /uapi/overseas-price/v1/quotations/dailyprice  (tr_id HHDFS76240000, 실전/모의 공통)
  * 상대 거래량(RVol)의 기준이 되는 평소 거래량을 구하는 데 쓴다. 오래된 날 → 최근 날 순서로 돌려준다.
  */
-export async function getDailyBars(client, symbol, exchange = 'NAS', { count = 30 } = {}) {
+export async function getDailyBars(client, symbol, exchange = 'NAS', { count = 30, period = 'D' } = {}) {
   const excd = toQuoteExchange(exchange);
   const { body } = await client.get('/uapi/overseas-price/v1/quotations/dailyprice', {
     trId: 'HHDFS76240000',
-    params: { AUTH: '', EXCD: excd, SYMB: symbol.toUpperCase(), GUBN: '0', BYMD: '', MODP: '1' },
+    params: { AUTH: '', EXCD: excd, SYMB: symbol.toUpperCase(), GUBN: { D: '0', W: '1', M: '2' }[period] || '0', BYMD: '', MODP: '1' }, // GUBN 0 일 / 1 주 / 2 월
   });
   const rows = Array.isArray(body.output2) ? body.output2 : [];
   return rows

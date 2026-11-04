@@ -22,7 +22,8 @@ const kis = createKis();
 const PORT = Number(process.env.SERVER_PORT || 8787);
 const HOST = process.env.SERVER_HOST || '127.0.0.1'; // 기본은 내 PC에서만 접근
 const ALLOW_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:5173';
-const API_TOKEN = process.env.LOCAL_API_TOKEN || ''; // 설정 시 주문 API에 x-api-token 헤더 필요
+const API_TOKEN = process.env.LOCAL_API_TOKEN || '';
+const barsCache = new Map(); // 설정 시 주문 API에 x-api-token 헤더 필요
 
 console.log(kis.describe());
 const llm = createLlm(kis);
@@ -45,6 +46,7 @@ const ENDPOINTS = [
   'POST /api/bot/liquidate',
   'POST /api/bot/discover  다윗 탐색 즉시 1회',
   'GET  /api/bot/calendar?month=2026-11   날짜별 손익 캘린더',
+  'GET  /api/bot/shadowcal?month=2026-11  날짜별 가상 거래 (전략·청산별)',
   'GET  /api/news?limit=60   뉴스 속보 (KIS + 종목별 야후·Alpha Vantage)',
   'POST /api/bot/gapscan   트랙 1 갭 스캔 즉시 1회 (?final=1 이면 오늘 후보 확정)',
   'GET  /api/bot/stats?env=demo   전략별 승률·손익비·PF',
@@ -54,6 +56,7 @@ const ENDPOINTS = [
   'GET  /api/kis/price?symbol=AAPL&exchange=NAS',
   'GET  /api/kis/orderbook?symbol=AAPL&exchange=NAS',
   'GET  /api/kis/candles?symbol=AAPL&exchange=NAS&interval=5&count=120',
+  'GET  /api/kis/bars?symbol=AAPL&exchange=NAS&period=D|W|M   일봉·주봉·월봉',
   'GET  /api/kis/account',
   'GET  /api/kis/signals?symbol=NVDA&exchange=NAS',
   'GET  /api/kis/discover?limit=15&minPrice=5',
@@ -125,6 +128,21 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/api/kis/candles') {
       const candles = await kis.getMinuteCandles(q.symbol, q.exchange || 'NAS', { interval: Number(q.interval || 5), count: Math.min(600, Number(q.count || 120)) });
       return send(res, 200, { symbol: q.symbol, interval: Number(q.interval || 5), candles });
+    }
+
+    // 일봉·주봉·월봉 (차트 탭용, 종목·주기별 5분 캐시)
+    if (req.method === 'GET' && url.pathname === '/api/kis/bars') {
+      const sym = String(q.symbol || '').toUpperCase();
+      const period = ['D', 'W', 'M'].includes(q.period) ? q.period : 'D';
+      if (!/^[A-Z][A-Z.\-]{0,9}$/.test(sym)) return send(res, 400, { ok: false, error: 'symbol이 올바르지 않습니다.' });
+      const key = `${sym}:${q.exchange || 'NAS'}:${period}`;
+      const hit = barsCache.get(key);
+      if (hit && Date.now() - hit.at < 5 * 60_000) return send(res, 200, hit.body);
+      const bars = await kis.getDailyBars(sym, q.exchange || 'NAS', { count: Math.min(100, Number(q.count || 90)), period });
+      const body = { ok: true, symbol: sym, period, bars };
+      barsCache.set(key, { at: Date.now(), body });
+      if (barsCache.size > 200) barsCache.delete(barsCache.keys().next().value);
+      return send(res, 200, body);
     }
 
     if (req.method === 'GET' && url.pathname === '/api/kis/holdings') {
@@ -225,6 +243,10 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/bot/calendar' && req.method === 'GET') {
       const month = /^\d{4}-\d{2}$/.test(q.month || '') ? q.month : new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()).slice(0, 7);
       return send(res, 200, { ok: true, ...bot.calendar(month) });
+    }
+    if (url.pathname === '/api/bot/shadowcal' && req.method === 'GET') {
+      const month = /^\d{4}-\d{2}$/.test(q.month || '') ? q.month : new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()).slice(0, 7);
+      return send(res, 200, { ok: true, ...bot.shadowCalendar(month) });
     }
     if (url.pathname === '/api/news' && req.method === 'GET') return send(res, 200, { ok: true, ...bot.news(Math.min(200, Math.max(1, Number(q.limit) || 60))) });
     if (url.pathname === '/api/bot/stats' && req.method === 'GET') return send(res, 200, { ok: true, ...journal.stats({ env: q.env || kis.config.env, since: q.since }), kellyFeedback: journal.kellyFeedback(q.env || kis.config.env) });

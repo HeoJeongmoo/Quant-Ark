@@ -3,7 +3,7 @@ import { config, describeConfig } from './config.js';
 import { TokenManager } from './token.js';
 import { KisClient, KisApiError } from './client.js';
 import { getPrice, getOrderbook, getMinuteCandles, getHoldings, resolveSymbol, getKisWatchlist, getAccount, getProductInfo, getDailyBars, getNews } from './quotes.js';
-import { placeOrder, buy, sell, cancelOrder, getOrderFills, OrderRejected } from './orders.js';
+import { placeOrder, buy, sell, cancelOrder, getOrderFills, getBuyingPower, OrderRejected } from './orders.js';
 import { KisRealtime, trKeyFor, parseTickFrame } from './realtime.js';
 import { joshuaBuy, mosesSell } from './agents.js';
 import { discover, premarketGappers } from './scanner.js';
@@ -31,6 +31,7 @@ export function createKis(cfg = config) {
     sell: (o) => sell(client, o),
     cancelOrder: (o) => cancelOrder(client, o),
     getOrderFills: (o) => getOrderFills(client, o),
+    getBuyingPower: (o) => getBuyingPower(client, o),
     discover: (opts) => discover(client, opts),
     premarketGappers: (opts) => premarketGappers(client, opts),
     joshuaBuy: (d) => joshuaBuy(client, d),

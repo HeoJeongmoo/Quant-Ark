@@ -14,6 +14,7 @@ const DIR = path.resolve(process.env.JOURNAL_DIR || 'data/journal');
 const POS_FILE = path.resolve(process.env.BOT_POSITIONS_FILE || 'data/bot-positions.json');
 // 매매 수수료(한 방향, %). KIS 체결가에는 수수료가 빠져 있어 손익 계산 때 직접 뺀다
 const FEE = Number(process.env.KIS_FEE_PCT || 0.25) / 100;
+const IDS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N']; // S티어 + 후보 전략
 const ensure = (f) => fs.mkdirSync(path.dirname(f), { recursive: true });
 const FILES = { fills: path.join(DIR, 'fills.jsonl'), trades: path.join(DIR, 'trades.jsonl'), signals: path.join(DIR, 'signals.jsonl'), shadow: path.join(DIR, 'shadow.jsonl') };
 
@@ -21,10 +22,36 @@ function append(file, obj) {
   ensure(file);
   fs.appendFileSync(file, JSON.stringify(obj) + '\n');
 }
+// 가상 기록을 백업 파일로 옮김 (초기화). 옮긴 파일 이름을 돌려줌
+export function archiveShadow(tag = 'reset') {
+  try {
+    if (!fs.existsSync(FILES.shadow)) return null;
+    const to = FILES.shadow.replace(/\.jsonl$/, `.${tag}-${new Date().toISOString().slice(0, 10)}.bak.jsonl`);
+    fs.renameSync(FILES.shadow, to);
+    return path.basename(to);
+  } catch {
+    return null;
+  }
+}
+// 파일이 바뀌지 않았으면 이전에 읽은 결과를 재사용 (몇 달치가 쌓여도 5분마다 전체를 다시 파싱하지 않게)
+const cache = {};
 export function readLines(kind, { limit = 5000 } = {}) {
   try {
-    const lines = fs.readFileSync(FILES[kind], 'utf8').trim().split('\n').filter(Boolean);
-    return lines.slice(-limit).map((l) => JSON.parse(l));
+    const st = fs.statSync(FILES[kind]);
+    let c = cache[kind];
+    if (!c || c.size !== st.size || c.mtime !== st.mtimeMs) {
+      const rows = [];
+      for (const l of fs.readFileSync(FILES[kind], 'utf8').split('\n')) {
+        if (!l.trim()) continue;
+        try {
+          rows.push(JSON.parse(l));
+        } catch {
+          /* 깨진 줄은 건너뜀 */
+        }
+      }
+      c = cache[kind] = { size: st.size, mtime: st.mtimeMs, rows };
+    }
+    return Number.isFinite(limit) ? c.rows.slice(-limit) : c.rows.slice();
   } catch {
     return [];
   }
@@ -117,6 +144,7 @@ function closeTrade(p, at, reason) {
     pnlPct: entryValue ? round((net / entryValue) * 100, 3) : 0,
     exitReason: reason || p.lastExitReason || '',
     track: p.track || (p.strategies?.length ? 'intraday' : ''),
+    profile: p.profile || null,
     source: p.external ? 'external' : 'bot',
   };
   append(FILES.trades, trade);
@@ -191,16 +219,28 @@ export function summarize(trades) {
 
 /** @param {{env?:string, since?:string}} f */
 export function stats({ env, since } = {}) {
-  const all = readLines('trades').filter((t) => (!env || t.env === env) && (!since || t.closedAt >= since));
+  const all = readLines('trades', { limit: Infinity }).filter((t) => (!env || t.env === env) && (!since || t.closedAt >= since));
   const bot = all.filter((t) => t.source !== 'external' && (t.strategies || []).length);
   const by = {};
-  for (const id of ['A', 'B', 'C', 'D']) by[id] = summarize(bot.filter((t) => t.strategies.includes(id)));
+  for (const id of IDS) by[id] = summarize(bot.filter((t) => t.strategies.includes(id)));
   by.multi = summarize(bot.filter((t) => new Set(t.strategies).size >= 2)); // 2개 이상 동시 신호
   const byTrack = { gap: summarize(bot.filter((t) => t.track === 'gap')), intraday: summarize(bot.filter((t) => t.track !== 'gap')) };
-  const sh = readLines('shadow').filter((t) => (!env || !t.env || t.env === env) && (!since || t.closedAt >= since));
-  const shadow = { overall: summarize(sh) };
-  for (const id of ['A', 'B', 'C', 'D']) shadow[id] = summarize(sh.filter((t) => (t.strategies || []).includes(id)));
-  return { env: env || 'all', since: since || null, overall: summarize(bot), external: summarize(all.filter((t) => t.source === 'external')), byStrategy: by, byTrack, shadow, recent: all.slice(-20).reverse() };
+  const sh = shadowRows().filter((t) => (!env || !t.env || t.env === env) && (!since || t.closedAt >= since));
+  const shadow = { overall: summarize(sh.filter((t) => t.kind !== 'candidate' || t.profile === 'P2')) };
+  for (const id of IDS) shadow[id] = summarize(sh.filter((t) => (t.strategies || []).includes(id) && (t.kind !== 'candidate' || t.profile === 'P2')));
+  // 실거래마다 같은 신호의 가상 거래를 찾아 붙인다 (같은 종목·전략, 진입 시각 15분 안, 청산 3종 중이면 실거래 청산 규칙과 같은 것 우선)
+  const allSh = shadowRows();
+  const match = (t) => {
+    if (!(t.strategies || []).length) return null;
+    const at = Date.parse(t.openedAt);
+    const cands = allSh.filter((x) => x.symbol === t.symbol && (x.strategies || []).some((id) => t.strategies.includes(id)) && Math.abs(Date.parse(x.openedAt) - at) <= 15 * 60_000);
+    const m = cands.find((x) => !x.profile || x.profile === (t.profile || 'P2')) || cands[0];
+    return m ? { pnlPct: m.pnlPct, exit: m.exit, why: m.why, profile: m.profile || null } : null;
+  };
+  const recent = all.slice(-50).reverse().map((t) => ({ ...t, shadow: match(t) }));
+  const paired = recent.filter((t) => t.shadow && Number.isFinite(t.shadow.pnlPct) && t.source !== 'external');
+  const gap = paired.length ? round(paired.reduce((x, t) => x + (t.pnlPct - t.shadow.pnlPct), 0) / paired.length, 3) : null;
+  return { env: env || 'all', since: since || null, overall: summarize(bot), external: summarize(all.filter((t) => t.source === 'external')), byStrategy: by, byTrack, shadow, recent, realVsShadow: { pairs: paired.length, avgGapPct: gap } };
 }
 
 /**
@@ -211,7 +251,7 @@ export function kellyFeedback(env) {
   const s = stats({ env }).byStrategy;
   const out = {};
   for (const [id, x] of Object.entries(s)) {
-    if (!x.trades || !['A', 'B', 'C', 'D'].includes(id)) continue;
+    if (!x.trades || !IDS.includes(id)) continue;
     out[id] = { trades: x.trades, wins: x.wins, avgWin: (x.avgWinPct || 0) / 100, avgLoss: (x.avgLossPct || 0) / 100 };
   }
   return out;
@@ -223,19 +263,65 @@ export function kellyFeedback(env) {
 export function recordShadow(x) {
   append(FILES.shadow, { ...x, pnl: x.pnlPct, closedAt: x.closedAt || new Date().toISOString() });
 }
+// 미체결로 버린 가상 거래(kind: missed)는 성적 계산에서 뺀다
+const counted = (t) => !t.skipped && Number.isFinite(t.pnlPct);
+// 보수적 체결 가정 이전(완벽 체결 가정)에 기록된 가상 거래는 실제와의 차이만큼 깎아서 센다
+const LEGACY_HAIRCUT = Number(process.env.SHADOW_LEGACY_HAIRCUT_PCT || 0.3);
+// 같은 종목·전략·청산 방식은 뉴욕 기준 하루 1건만 센다 (재시작 등으로 중복 기록된 것 제거)
+const NY_YMD = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
+export const shadowYmd = (t) => {
+  const ms = Number.isFinite(t.barT) ? t.barT : Date.parse(t.openedAt || t.closedAt || '');
+  return Number.isFinite(ms) ? NY_YMD.format(new Date(ms)) : '';
+};
+export const shadowDayKey = (t) => {
+  const ymd = shadowYmd(t);
+  return `${t.env || ''}|${ymd}|${t.symbol}|${(t.strategies || []).join('')}|${t.profile || ''}`;
+};
+export function dedupeShadows(rows) {
+  const seen = new Set();
+  return rows.filter((t) => {
+    const k = shadowDayKey(t);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+// 가상 캘린더: 날짜(뉴욕) → 전략·청산별 {n, sum, wins}
+export function shadowCalendar(env, month) {
+  const days = {};
+  for (const t of shadowRows()) {
+    if (t.env && env && t.env !== env) continue;
+    const ymd = shadowYmd(t);
+    if (!ymd.startsWith(month)) continue;
+    const k = `${(t.strategies || []).join('+')}${t.profile ? `·${t.profile}` : ''}`;
+    const d = (days[ymd] ||= {});
+    const x = (d[k] ||= { n: 0, sum: 0, wins: 0 });
+    x.n++;
+    x.sum = Math.round((x.sum + t.pnlPct) * 1000) / 1000;
+    if (t.pnlPct > 0) x.wins++;
+  }
+  return { month, days };
+}
+
+export function shadowRows() {
+  return dedupeShadows(readLines('shadow', { limit: Infinity }).filter(counted))
+    .map((t) => (t.model === 'conservative' ? t : { ...t, pnlPct: t.pnlPct - LEGACY_HAIRCUT, pnl: (t.pnl ?? t.pnlPct) - LEGACY_HAIRCUT, legacy: true }));
+}
 
 /**
  * Holly식 전략 자동 선택: 전략별 최근 실거래로 끄고, 꺼진 뒤의 가상 거래로 다시 켠다.
  * @returns {{[id]: {status:'on'|'off', mode, reason, real, shadow, shadowSinceOff}}}
  */
 export function strategyHealth(env, { modes = {}, minTrades = 30, window = 40, minShadow = 15 } = {}) {
-  const bot = readLines('trades').filter((t) => t.env === env && t.source !== 'external' && (t.strategies || []).length);
-  const sh = readLines('shadow').filter((t) => !t.env || t.env === env);
+  const bot = readLines('trades', { limit: Infinity }).filter((t) => t.env === env && t.source !== 'external' && (t.strategies || []).length);
+  const sh = shadowRows().filter((t) => !t.env || t.env === env);
   const out = {};
-  for (const id of ['A', 'B', 'C', 'D']) {
+  for (const id of IDS) {
     const realAll = bot.filter((t) => t.strategies.includes(id));
     const real = summarize(realAll.slice(-window));
-    const shadowAll = sh.filter((t) => (t.strategies || []).includes(id));
+    // A~D는 S티어 가상 거래, E~I(후보)는 후보 전략 가상 거래(청산 규칙 3종 모두)
+    const shadowAll = sh.filter((t) => (t.strategies || []).includes(id) && (t.kind !== 'candidate' || t.profile === 'P2')); // 청산 3종 중 기본(P2)만 세어 중복 방지
     const shadow = summarize(shadowAll.slice(-window));
     const mode = modes[id] || 'auto';
     let status = 'on';

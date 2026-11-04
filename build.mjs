@@ -21,6 +21,10 @@ export async function build({ dev = false } = {}) {
     .map(([n, file]) => `@font-face{font-family:'${n}';src:url(data:font/woff2;base64,${fontB64(file)}) format('woff2');font-display:block}`)
     .join('\n');
   const css = fs.readFileSync('src/style.css', 'utf8');
+  // 파비콘·홈 화면 아이콘 (src/brand, 원본은 brand/make_logo.py)
+  const png = (f) => { try { return fs.readFileSync(`src/brand/${f}`).toString('base64'); } catch { return null; } };
+  const i64 = png('logo-64.png'), i180 = png('logo-180.png');
+  const icons = [i64 && `<link rel="icon" type="image/png" href="data:image/png;base64,${i64}">`, i180 && `<link rel="apple-touch-icon" href="data:image/png;base64,${i180}">`, '<meta name="theme-color" content="#141517">'].filter(Boolean).join('\n');
   // dev only: reload the page when the dev server reports a new build
   const live = dev
     ? `<script>(()=>{let v=null;setInterval(async()=>{try{const n=await (await fetch('/__version')).text();if(v&&n!==v)location.reload();v=n}catch(e){}},700)})()</script>`
@@ -28,6 +32,7 @@ export async function build({ dev = false } = {}) {
   const html = `<!DOCTYPE html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>퀀트 오피스 · Pixel Agents</title>
+${icons}
 <style>${fonts}\n${css}</style></head>
 <body><div id="root"></div><script>${js}</script>${live}</body></html>`;
   // 개발 서버(npm run dev)는 메모리에서만 쓰고 dist는 건드리지 않는다 (dist는 봇 서버가 화면으로 내보냄)

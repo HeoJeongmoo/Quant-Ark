@@ -149,14 +149,19 @@ ok(classifyHeadlines(rss).catalyst === 'negative', '야후 RSS 제목도 같은 
 // --- 전략 자동 선택 (Holly식) ---
 const jdir = process.env.JOURNAL_DIR;
 fs.mkdirSync(jdir, { recursive: true });
-const tline = (i, pnlPct) => JSON.stringify({ env: 'demo', strategies: ['B'], pnl: pnlPct, pnlPct, closedAt: `2026-10-${String(1 + (i % 28)).padStart(2, '0')}T15:00:${String(i).padStart(2, '0')}Z` });
+const tline = (i, pnlPct) => JSON.stringify({ env: 'demo', symbol: `S${i}`, strategies: ['B'], pnl: pnlPct, pnlPct, closedAt: `2026-10-${String(1 + (i % 28)).padStart(2, '0')}T15:00:${String(i).padStart(2, '0')}Z` });
 fs.appendFileSync(path.join(jdir, 'trades.jsonl'), Array.from({ length: 30 }, (_, i) => tline(i, i % 3 === 0 ? 1 : -1)).join('\n') + '\n');
 let hl = journal.strategyHealth('demo', { minTrades: 30 });
 ok(hl.B.status === 'off' && hl.A.status === 'on', '자동 선택: B 실거래 30건 기대값 음수 → 끔, 표본 없는 A는 켬', hl.B.reason);
 ok(journal.strategyHealth('demo', { minTrades: 30, modes: { B: 'on' } }).B.status === 'on', '자동 선택: 사용자가 켬으로 고정하면 무시');
-fs.appendFileSync(path.join(jdir, 'shadow.jsonl'), Array.from({ length: 16 }, (_, i) => JSON.stringify({ env: 'demo', strategies: ['B'], pnl: i % 4 === 0 ? -1 : 1.5, pnlPct: i % 4 === 0 ? -1 : 1.5, closedAt: `2026-11-02T15:${String(10 + i).padStart(2, '0')}:00Z` })).join('\n') + '\n');
+fs.appendFileSync(path.join(jdir, 'shadow.jsonl'), Array.from({ length: 16 }, (_, i) => JSON.stringify({ env: 'demo', symbol: `S${i}`, strategies: ['B'], pnl: i % 4 === 0 ? -1 : 1.5, pnlPct: i % 4 === 0 ? -1 : 1.5, closedAt: `2026-11-02T15:${String(10 + i).padStart(2, '0')}:00Z` })).join('\n') + '\n');
 hl = journal.strategyHealth('demo', { minTrades: 30 });
 ok(hl.B.status === 'on', '자동 선택: 꺼진 뒤 가상 거래 16건이 좋아지면 다시 켬', hl.B.reason);
+
+// 보수적 체결 이전 기록은 0.3%p 깎아서 셈
+const rawFirst = journal.readLines('shadow').find((t) => t.model !== 'conservative' && Number.isFinite(t.pnlPct));
+const legacy = journal.shadowRows().find((t) => t.legacy);
+ok(legacy && Math.abs(legacy.pnlPct - (rawFirst.pnlPct - 0.3)) < 1e-9, '가상 거래: 예전(완벽 체결 가정) 기록은 0.3%p 불리하게 계산', legacy && `${rawFirst.pnlPct} → ${legacy.pnlPct}`);
 
 // --- 손익 캘린더 ---
 const equity = await import('../server/bot/equity.js');
@@ -170,6 +175,128 @@ const d3 = cal.days.find((d) => d.date === '2026-11-03');
 ok(d2.pnl === 30 && d2.pnlPct === 3 && d2.base === 1000, '캘린더: 11/2 = 전 거래일(10/30) 대비 +$30 (+3%)', JSON.stringify(d2));
 ok(d3.pnl === -20 && d3.realized === 10 && d3.trades === 2 && d3.wins === 1, '캘린더: 11/3 평가 −$20, 실현 +$10 (2건 중 1승)', JSON.stringify(d3));
 ok(cal.total.pnl === 10 && cal.total.pnlPct === 1 && cal.total.upDays === 1 && cal.total.downDays === 1, '캘린더: 월 합계 +$10 (+1%), 오른 날 1·내린 날 1', JSON.stringify(cal.total));
+
+// --- 후보 전략 ---
+const C = await import('../src/strategy/candidates.js');
+const b = (o, h, l, c, v = 1000) => ({ o, h, l, c, v });
+// E VWAP 회복: 하락하다 VWAP 위로 거래량 실린 양봉
+const eS = [b(10, 10.1, 9.9, 10, 1000), b(10, 10, 9.7, 9.75, 1000), b(9.75, 9.8, 9.6, 9.65, 1000), b(9.65, 9.7, 9.6, 9.68, 1000), b(9.68, 10.2, 9.66, 10.15, 3000)];
+ok(C.checkE(eS).fired, '후보 E: VWAP 회복 양봉 → 신호', C.checkE(eS).detail);
+// F 장중 고점 돌파: 고점 10.5 → 6봉 좁은 횡보 → 돌파
+const fS = [b(10, 10.5, 9.9, 10.3), b(10.3, 10.35, 10.25, 10.3), b(10.3, 10.36, 10.26, 10.32), b(10.32, 10.37, 10.27, 10.3), b(10.3, 10.36, 10.26, 10.33), b(10.33, 10.38, 10.28, 10.31), b(10.31, 10.37, 10.27, 10.34), b(10.34, 10.7, 10.33, 10.65, 3000)];
+ok(C.checkF(fS).fired, '후보 F: 좁은 횡보 후 당일 고점 돌파 → 신호', C.checkF(fS).reason || C.checkF(fS).detail);
+// G 레드 투 그린
+const gS = [b(9.8, 9.9, 9.6, 9.7), b(9.7, 9.95, 9.65, 9.9), b(9.9, 10.2, 9.88, 10.15, 2000)];
+ok(C.checkG(gS, 10).fired && !C.checkG([...gS, b(10.15, 10.3, 10.1, 10.25)], 10).fired, '후보 G: 전일 종가 첫 회복만 신호 (두 번째 봉은 아님)');
+// H NR7: 넓은 봉 6개 → 좁은 봉 → 그 고가 돌파 양봉
+const hS = [b(10, 10.5, 9.5, 10), b(10, 10.4, 9.6, 10.1), b(10.1, 10.5, 9.7, 10), b(10, 10.4, 9.6, 10.2), b(10.2, 10.6, 9.8, 10.1), b(10.1, 10.5, 9.7, 10), b(10, 10.1, 9.95, 10.05), b(10.05, 10.4, 10.02, 10.3)];
+ok(C.checkH(hS).fired, '후보 H: NR7 봉 고가 돌파 → 신호');
+// I 불 플래그: 급등 → 얕은 눌림(거래량 감소) → 재상승
+const iS = [b(10, 10.05, 9.95, 10), b(10, 10.05, 9.95, 10), b(10, 10.05, 9.95, 10), b(10, 10.05, 9.95, 10), b(10, 10.2, 10, 10.2, 3000), b(10.2, 10.45, 10.2, 10.45, 3000), b(10.45, 10.5, 10.35, 10.4, 800), b(10.4, 10.42, 10.3, 10.33, 700), b(10.33, 10.4, 10.3, 10.38, 600), b(10.38, 10.5, 10.37, 10.48, 1500)];
+ok(C.checkI(iS).fired, '후보 I: 불 플래그 재상승 → 신호', C.checkI(iS).detail || C.checkI(iS).reason);
+
+// --- 승격 ---
+const { evaluatePromotions } = await import('../server/bot/promotion.js');
+const shLine = (id, pid, i, pnl) => JSON.stringify({ kind: 'candidate', model: 'conservative', env: 'demo', symbol: `S${i}`, strategies: [id], profile: pid, pnl, pnlPct: pnl, closedAt: `2026-10-${String(1 + (i % 20)).padStart(2, '0')}T15:${String(i % 60).padStart(2, '0')}:00Z` });
+const lines = [];
+for (let i = 0; i < 40; i++) lines.push(shLine('E', 'P2', i, i % 3 === 0 ? -1.5 : 1.4)); // 승률 약 2/3, 기대값 +0.3 이상
+for (let i = 0; i < 40; i++) lines.push(shLine('F', 'P1', i, i % 2 === 0 ? -1 : 0.9)); // 기대값 음수
+for (let i = 0; i < 20; i++) lines.push(shLine('G', 'P3', i, 3)); // 표본 부족
+fs.appendFileSync(path.join(jdir, 'shadow.jsonl'), lines.join('\n') + '\n');
+const pm = evaluatePromotions('demo', { minTrades: 40, minExp: 0.3, minPF: 1.3 });
+ok(evaluatePromotions('demo', { minTrades: 40, minExp: 0.3, minPF: 1.3, minDays: 25 }).E.status === 'watch', '승격: 거래일 25일 미만이면 관찰 유지', evaluatePromotions('demo', { minDays: 25 }).E.reason);
+ok(pm.E.status === 'promoted' && pm.E.profile === 'P2', '승격: E 청산 P2가 40건·기대값·PF·앞뒤 절반 모두 통과 → 승격', pm.E.reason);
+ok(pm.F.status === 'watch' && pm.G.status === 'watch', '승격: 기대값 음수(F)·표본 부족(G)은 관찰', `${pm.F.reason} / ${pm.G.reason}`);
+ok(evaluatePromotions('demo', { modes: { E: 'off' } }).E.status === 'watch' && evaluatePromotions('demo', { modes: { G: 'on' } }).G.status === 'promoted', '승격: 사용자 모드(관찰 고정/승격 고정)가 우선');
+
+// A·B·C도 승격 대상: 예전 가상 거래(청산 표시 없음, 목표 3%·손절 1.5%)는 P2로 셈
+fs.appendFileSync(path.join(jdir, 'shadow.jsonl'), Array.from({ length: 10 }, (_, i) => JSON.stringify({ env: 'demo', symbol: `S${i}`, strategies: ['A', 'C'], tpPct: 3, slPct: 1.5, pnl: -0.7, pnlPct: -0.7, closedAt: `2026-11-03T15:${String(i).padStart(2, '0')}:00Z` })).join('\n') + '\n');
+const pa = evaluatePromotions('demo', {});
+ok(pa.A && pa.A.status === 'watch' && pa.A.profiles.P2.trades === 10 && pa.C.profiles.P2.trades >= 10 && !pa.D, '승격: A·C 예전 가상 거래가 P2로 집계, 관찰 상태 (D는 승격 대상 아님)', pa.A.reason);
+
+// 모세: 승격 전략은 목표 도달 시 바로 익절
+const jt = judgeExit({ symbol: 'E1', price: 10.31, avg: 10, qty: 3, peak: 10.31, botPosition: true, ageMin: 10, candles: [] }, { mode: 'auto', hardStopPct: 3, minTargetPct: 3, lossCutPct: 1.5, costPct: 0.6, maxHoldMin: 360, fixedTake: true });
+ok(jt.action === 'EXIT_TAKE', '모세: 승격 전략 목표 +3% 도달 → 익절', jt.reasons[0]);
+
+{
+  const t0 = Date.parse('2026-11-04T14:30:00Z');
+  const base = { env: 'real', symbol: 'FLNC', strategies: ['H'], profile: 'P1' };
+  const rows = [{ ...base, barT: t0 }, { ...base, barT: t0 }, { ...base, barT: t0 + 3600e3 }, { ...base, profile: 'P2', barT: t0 }, { ...base, symbol: 'IBTA', barT: t0 }, { ...base, barT: t0 + 86400e3 }];
+  const d = journal.dedupeShadows(rows);
+  ok(d.length === 4, '가상 거래: 같은 종목·전략·청산은 하루 1건만', d.length);
+}
+
+{
+  const Rg = await import('../server/bot/regime.js');
+  const up = Array.from({ length: 12 }, (_, i) => ({ o: 100 + i * 0.1, h: 100.15 + i * 0.1, l: 99.95 + i * 0.1, c: 100.1 + i * 0.1 }));
+  const q = Rg.qqqRegime({ session: up, prevClose: 99.5, avgRangePct: 1 });
+  ok(q.dir === '강세' && q.trend === '추세', '장세: QQQ 꾸준히 상승 → 강세·추세', JSON.stringify(q));
+  const chop = Array.from({ length: 12 }, (_, i) => ({ o: 100, h: 100.6, l: 99.4, c: i % 2 ? 100.3 : 99.8 }));
+  const q2 = Rg.qqqRegime({ session: chop, prevClose: 100, avgRangePct: 0.6 });
+  ok(q2.dir === '보합' && q2.trend === '횡보' && q2.vol === '높음', '장세: 위아래 흔들림 → 보합·횡보·변동 높음', JSON.stringify(q2));
+  const b = Rg.breadthOf({ XLK: 1, XLF: 0.5, XLE: -1, XLV: 0.2, XLY: 0.3, XLP: 0.1, XLI: 0.4, XLB: 0.2, XLU: -0.2, XLRE: 0.1, XLC: 0.6, RSP: 0.2, SPY: 0.5, VIXY: -3, IWM: -0.8 }, 1.1);
+  ok(b.iwm === -0.8 && b.spy === 0.5 && b.qqqIwm === 1.9, '시장 폭: IWM −0.8% · QQQ−IWM +1.9%p (대형주 장)', JSON.stringify(b));
+  ok(b.sectorsUp === 9 && b.breadth === '넓음' && b.rspSpy === -0.3 && b.vixy === -3, '시장 폭: 섹터 9/11 상승 · RSP−SPY −0.3%p · VIXY −3%', JSON.stringify(b));
+}
+
+{
+const C = await import('../src/strategy/candidates.js');
+const t = (i) => { const m = 570 + 5 * i; return `2026-11-05T${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; };
+const B = (o, h, l, c, v = 1000, i = 0) => ({ o, h, l, c, v, time: t(i) });
+// J
+const J = Array.from({ length: 24 }, (_, i) => B(10, 10.05, i === 5 ? 9.9 : 9.95, 10, 1000, i));
+J.push(B(9.95, 9.96, 9.85, 9.88, 1000, 24), B(9.88, 9.97, 9.87, 9.95, 1000, 25));
+ok(C.checkJ(J).fired, '후보 J 터틀 수프: 20봉 저가 살짝 깬 뒤 회복 → 신호', C.checkJ(J).detail || C.checkJ(J).reason);
+// K
+const K = [B(10, 10.05, 9.95, 10, 1000, 0), B(10, 10.05, 9.95, 10, 1000, 1), B(10, 10.05, 9.95, 9.97, 1000, 2), B(9.97, 9.9, 9.8, 9.85, 1000, 3), B(9.85, 10.25, 9.84, 10.2, 3000, 4), B(10.2, 10.3, 10.0, 10.25, 2000, 5), B(10.25, 10.3, 10.05, 10.1, 1000, 6), B(10.08, 10.15, 9.98, 10.1, 1000, 7)];
+ok(C.checkK(K).fired, '후보 K 실버 불릿: 저가 쓸기 → FVG 첫 되돌림 → 신호', C.checkK(K).detail || C.checkK(K).reason);
+ok(!C.checkK(K.map((b) => ({ ...b, time: b.time.replace('T10:', 'T11:') }))).fired, '후보 K: 11시 이후는 신호 없음', '');
+// L
+const L = Array.from({ length: 13 }, (_, i) => B(10, 10.03, 9.97, 10, 1000, i));
+L.push(B(9.9, 9.9, 9.45, 9.5, 1500, 13), B(9.6, 9.92, 9.58, 9.9, 1500, 14));
+ok(C.checkL(L).fired, '후보 L VWAP 2σ: 밴드 밖 → 안으로 복귀 → 신호', C.checkL(L).detail);
+// M
+const M = Array.from({ length: 45 }, (_, i) => { const o = 10 + i * 0.2; return B(o, o + 0.25, o - 0.03, o + 0.2, 1000, i); });
+const e = C.ema(M.map((b) => b.c), 20);
+const top = M[M.length - 1].c;
+const ePrev = e[e.length - 1];
+M.push(B(top, top + 0.02, ePrev - 0.02, ePrev + 0.15, 1000, 45));
+M.push(B(ePrev + 0.15, top + 0.1, ePrev + 0.1, top + 0.05, 1000, 46));
+ok(C.checkM(M).fired, '후보 M 홀리 그레일: ADX 30↑ 추세 중 20 EMA 첫 눌림 → 신호', C.checkM(M).detail || C.checkM(M).reason);
+{
+  const cs = [10, 10.1, 10.2, 10.3, 10.4, 10.5, 10.4, 10.3, 10.2, 10.1, 10.0, 10.1, 10.25, 10.4, 10.6, 10.8, 10.9, 10.7, 10.55, 10.45, 10.5, 10.6];
+  const pre = Array.from({ length: 10 }, (_, i) => 9.9 - (10 - i) * 0.01);
+  const all = [...pre, ...cs];
+  const N2 = all.map((c, i) => { const o = i ? all[i - 1] : c; return B(o, Math.max(o, c) + 0.02, Math.min(o, c) - 0.02, c, 1000, i); });
+  ok(C.checkN(N2).fired, '후보 N DTFX: 구조 전환 후 50~70% 되돌림 재상승 → 신호', C.checkN(N2).detail || C.checkN(N2).reason);
+}
+
+  // 은퇴 판정 · 장세 한정 승격
+  const { evaluateRetirements, evaluatePromotions: evP } = await import('../server/bot/promotion.js');
+  const day = (i) => new Date(Date.UTC(2026, 6, 1 + (i % 40), 15)).toISOString();
+  const rowsX = [];
+  for (const pf of ['P1', 'P2', 'P3']) for (let i = 0; i < 110; i++) rowsX.push(JSON.stringify({ kind: 'candidate', model: 'conservative', env: 'demo', symbol: `R${i}`, strategies: ['M'], profile: pf, pnl: i % 3 ? -0.6 : 0.4, pnlPct: i % 3 ? -0.6 : 0.4, closedAt: day(i) }));
+  for (let i = 0; i < 120; i++) {
+    const dir = ['강세', '보합', '약세'][i % 3];
+    const v = dir === '강세' ? (i % 4 ? 1.2 : -0.9) : -0.8;
+    rowsX.push(JSON.stringify({ kind: 'candidate', model: 'conservative', env: 'demo', symbol: `Q${i}`, strategies: ['J'], profile: 'P2', regime: { dir }, pnl: v, pnlPct: v, closedAt: day(i) }));
+  }
+  fs.appendFileSync(path.join(jdir, 'shadow.jsonl'), rowsX.join('\n') + '\n');
+  const pr = evP('demo', { ids: ['M', 'J'], minTrades: 40, minExp: 0.3, minPF: 1.3, minDays: 10 });
+  ok(pr.J.status === 'regime' && pr.J.dirs.join() === '강세', '장세 한정 승격: J는 강세일에만 기준 통과 → 강세 한정', pr.J.reason);
+  const ret = evaluateRetirements('demo', { ids: ['M', 'J'], promo: pr, elapsed: () => 35 });
+  ok(ret.length === 1 && ret[0].id === 'M' && ret[0].kind === 'poor', '은퇴: M 110건·40일·기대값 마이너스 → 부진 은퇴 (J는 장세 한정이라 제외)', ret.map((r) => r.reason).join(' | '));
+  ok(evaluateRetirements('demo', { ids: ['K'], promo: { K: { status: 'watch' } }, elapsed: () => 61 })[0]?.kind === 'sparse', '은퇴: 60거래일 지나도 40건 미만 → 신호 부족', '');
+  // 명부: 은퇴 → 결번, 대기열 맨 앞 투입
+  process.env.BOT_REGISTRY_FILE = path.join(tmp, 'registry.json');
+  const { createRegistry } = await import('../server/bot/registry.js');
+  const reg = createRegistry({ today: () => '2026-11-05' });
+  ok(reg.active().length === 10 && reg.queued().join('') === 'LMN', '명부: 후보 10자리 (A~K, D 제외) · 대기열 L·M·N', reg.active().join('') + ' / ' + reg.queued().join(''));
+  const added = reg.retire('H', '테스트');
+  ok(added.join('') === 'L' && !reg.active().includes('H') && reg.retired()[0].id === 'H', '명부: H 은퇴 → 결번, L 투입', added.join(''));
+  const reg2 = createRegistry({ today: () => '2026-11-06' });
+  ok(reg2.retired().some((r) => r.id === 'H') && reg2.active().includes('L'), '명부: 재시작해도 은퇴·투입 유지', reg2.active().join(''));
+}
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(fail ? `\n${fail}개 실패` : '\n모두 통과');

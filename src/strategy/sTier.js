@@ -1,3 +1,4 @@
+import { CANDIDATES } from './candidates.js';
 // S티어 매수 트리거 (OR 조건) + 켈리 공식 포지션 사이징
 // 순수 함수만 두어 브라우저(에이전트 파이프라인)와 Node 서버(/api/kis/signals) 양쪽에서 같은 판정을 쓴다.
 //
@@ -145,6 +146,8 @@ export const STRATEGIES = {
   C: { id: 'C', name: '장 초반 갭 눌림목', prior: { win: 0.52, payoff: 1.6 } },
   D: { id: 'D', name: '갭 후보 시가 범위 돌파', prior: { win: 0.45, payoff: 1.6 } },
 };
+// 후보 전략(E~I)까지 포함한 전체 목록 (켈리 기본값·이름 조회용)
+export const ALL_STRATEGIES = { ...STRATEGIES, ...CANDIDATES };
 
 // ---------------------------------------------------------------------------
 // 조건 D (트랙 1): 장전 갭 후보의 시가 범위 돌파 (Opening Range Breakout)
@@ -195,7 +198,7 @@ export function evaluateSTier(candles, ctx = {}) {
 // ---------------------------------------------------------------------------
 // tpPct/slPct(비율)를 주면 ATR 대신 고정 목표·손절, cost(왕복 비용 비율)는 거래마다 차감
 export function backtestStats(candles, id, { hold = 6, tp = 1.5, sl = 1, tpPct = null, slPct = null, cost = 0 } = {}) {
-  if (id === 'C' || id === 'D') return { trades: 0, wins: 0, avgWin: 0, avgLoss: 0 }; // 시각 정보가 필요한 C·D는 기본값만 사용
+  if (id !== 'A' && id !== 'B') return { trades: 0, wins: 0, avgWin: 0, avgLoss: 0 }; // 시각·당일 정보가 필요한 C·D·후보 전략은 기본값만 사용
   const check = id === 'A' ? checkA : checkB;
   const res = [];
   for (let i = 25; i < candles.length - 1; i++) {
@@ -232,7 +235,7 @@ export function backtestStats(candles, id, { hold = 6, tp = 1.5, sl = 1, tpPct =
 
 // prior: 전략 기본값. costAdj(왕복 비용/목표)를 주면 기본 손익비를 그만큼 깎아 수수료 후 값으로 본다
 export function kelly(id, stats, { priorWeight = 10, payoffOverride = null } = {}) {
-  const p0 = STRATEGIES[id].prior;
+  const p0 = ALL_STRATEGIES[id].prior;
   const p = { win: p0.win, payoff: payoffOverride ?? p0.payoff };
   const n = stats?.trades || 0;
   const win = (stats.wins + p.win * priorWeight) / (n + priorWeight);

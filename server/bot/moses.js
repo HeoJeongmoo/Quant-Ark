@@ -44,6 +44,11 @@ export function judgeExit(x, rules) {
   const target = (rules.minTargetPct ?? 1.5) / 100;
   const cost = (rules.costPct ?? 0.6) / 100;
 
+  // 승격 전략: 가상 거래로 검증한 그대로 목표 수익에 닿으면 바로 익절
+  if (rules.fixedTake && x.botPosition && pnl >= target) {
+    return { ...base, action: 'EXIT_TAKE', urgency: 'take', confidence: 0.9, reasons: [`승격 전략 목표 +${(target * 100).toFixed(1)}% 도달 (${(pnl * 100).toFixed(2)}%)`] };
+  }
+
   // 시간 손절: 진입 필터가 기대한 시간(보유 예정 봉 수의 2배)이 지나도 비용을 못 넘기면 정리
   if (x.botPosition && rules.maxHoldMin && x.ageMin >= rules.maxHoldMin && pnl < cost) {
     return { ...base, action: pnl < 0 ? 'EXIT_STOP' : 'EXIT_TAKE', urgency: 'take', confidence: 0.7, reasons: [`보유 ${Math.round(x.ageMin)}분 경과, 수익 ${(pnl * 100).toFixed(2)}%가 비용 ${(cost * 100).toFixed(2)}% 미만 (시간 손절)`] };

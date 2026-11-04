@@ -79,6 +79,6 @@ export function calendar(month, trades = []) {
       upDays: withPnl.filter((x) => x.pnl > 0).length,
       downDays: withPnl.filter((x) => x.pnl < 0).length,
     },
-    note: '평가금액 기준 손익에는 입출금·환전 금액이 섞일 수 있어요. 실현 손익은 체결 기록(수수료 차감) 기준입니다.',
+    note: '평가금액 손익엔 입출금·환전 포함 가능 · 실현 손익은 체결 기록(수수료 차감) 기준',
   };
 }

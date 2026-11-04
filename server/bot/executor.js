@@ -56,6 +56,13 @@ export function createExecutor({ kis, emit, getEnv, nyYmd, dryRunFor, onFill = (
       res = await send(o, stage);
     } catch (e) {
       emit('order-error', req.side === 'buy' ? 'trA' : 'trB', `${req.symbol} ${req.side === 'buy' ? '매수' : '매도'} 주문 실패: ${e.message}`, { order: o, error: e.message }, 'warn');
+      // 주문가능금액 초과로 거절되면 그 순간의 KIS 매수가능 금액을 같이 남긴다 (원인 확인용)
+      if (req.side === 'buy' && /APBK0952|주문가능금액/.test(e.message) && kis.getBuyingPower) {
+        kis
+          .getBuyingPower({ symbol: req.symbol, exchange: req.exchange, price: req.maxPrice || 1 })
+          .then((bp) => emit('order-error', 'trA', `${req.symbol} 거절 직후 KIS 매수가능 조회: 주문가능 외화 $${bp.orderableUsd} · 해외주문가능 $${bp.overseasOrderable} · 주문가능 ${bp.qty}주 · 매도재사용 $${bp.sellReuseUsd} (주문 ${req.qty}주 × 상한 $${req.maxPrice})`, { buyingPower: bp.raw }, 'warn'))
+          .catch(() => null);
+      }
       return { error: e.message };
     }
     if (res.dryRun) {

@@ -73,9 +73,7 @@ h1, h2, h3, p { margin: 0; }
 }
 .brand { display: flex; align-items: center; gap: 12px; }
 .brand-icon {
-  width: 44px; height: 44px; image-rendering: pixelated;
-  background: var(--panel2);
-  box-shadow: 0 -3px 0 var(--ink), 0 3px 0 var(--ink), -3px 0 0 var(--ink), 3px 0 0 var(--ink);
+  width: 48px; height: 48px; image-rendering: pixelated;
 }
 .brand h1 { font-family: 'Galmuri11B', 'Galmuri11', monospace; font-size: 24px; line-height: 1.1; letter-spacing: 1px; color: var(--amber); text-shadow: 2px 2px 0 #6b3d10; }
 .brand p { color: var(--dim); }
@@ -993,3 +991,149 @@ body { word-break: keep-all; overflow-wrap: anywhere; }
 .cal-d.sel { outline: 2px solid var(--text); outline-offset: -2px; }
 .cal-detail { font-size: 11px; margin: 6px 0 0; line-height: 1.5; }
 .news-tag.new { color: #141517; background: #f5c542; }
+
+/* 후보 전략 */
+.cand-h { font-size: 12px; margin: 10px 0 4px; }
+.st-chip.watch { color: var(--dim); background: var(--ink); box-shadow: 0 0 0 1px var(--edge); }
+.stats td.prof { font-size: 10px; line-height: 1.6; }
+.stats td.prof span { display: block; color: var(--dim); white-space: nowrap; }
+.stats td.prof span.pass { color: var(--mint); }
+.stats td.prof span.cur { font-weight: bold; color: var(--text); }
+.stats tr.promoted td:first-child { color: var(--mint); }
+.lamp.sm { font-size: 8px; padding: 0 2px; margin-right: 1px; }
+.lamp.shadow { opacity: .55; outline: 1px dashed var(--dim); }
+td.cand-l { white-space: nowrap; min-width: 10px; }
+
+/* 넓은 화면: 컨테이너를 넓히고 오른쪽 패널 폭을 화면에 맞춰 키움 (표가 패널 밖으로 넘치지 않게) */
+.app { max-width: 1920px; grid-template-columns: minmax(0, 1fr) clamp(380px, 31vw, 560px); }
+.app > .right, .app > .left { min-width: 0; }
+.right .win { min-width: 0; overflow: visible; }
+.right table { width: 100%; max-width: 100%; }
+.right .stats td, .right .stats th { word-break: keep-all; overflow-wrap: anywhere; }
+.right .stats td.prof span { white-space: normal; }
+@media (max-width: 1100px) { .app { grid-template-columns: 1fr; } }
+.ovr-group h3.sub { font-size: 11px; margin: 10px 0 4px; color: var(--dim); }
+.strat-sw.cand table { table-layout: auto; font-size: 10px; }
+.strat-sw.cand th { white-space: nowrap; font-weight: normal; }
+.strat-sw.cand td:first-child { min-width: 70px; }
+.strat-sw.cand td:nth-child(2), .strat-sw.cand td:nth-child(4) { white-space: nowrap; }
+.strat-sw.cand td.prof { min-width: 110px; }
+.strat-sw.cand .mode-btns button { padding: 1px 3px; }
+.strat-sw.cand td.prof { min-width: 0; }
+.strat-sw.cand td.prof span { white-space: normal; }
+select.mode-sel { font: inherit; font-size: 10px; padding: 1px 2px; background: var(--ink); color: var(--text); border: 0; box-shadow: 0 0 0 1px var(--edge); }
+.strat-sw.cand td:first-child { min-width: 0; }
+.strat-sw.cand th, .strat-sw.cand td { padding: 3px 2px; }
+.size-mode { display: flex; gap: 4px; margin-bottom: 6px; }
+.size-mode button { flex: 1; font: inherit; font-size: 10px; padding: 3px 4px; cursor: pointer; background: var(--ink); color: var(--dim); border: 0; box-shadow: 0 0 0 1px var(--edge); }
+.size-mode button.on { background: var(--amber); color: #141517; }
+.chart-tabs { margin-bottom: 6px; }
+.chart-win .px-chart { width: 100%; height: auto; }
+.chart-win .chart-foot { display: flex; gap: 10px; flex-wrap: wrap; justify-content: space-between; }
+
+/* ---------- 레이아웃 정리: 상태 줄 · 왼쪽(오피스·차트·메신저+뉴스) · 오른쪽 탭(매매/성과/설정) ---------- */
+.app { grid-template-areas: 'top top' 'sched sched' 'status status' 'left right'; }
+.status-strip { grid-area: status; display: flex; flex-wrap: wrap; gap: 8px; }
+.ss-item { flex: 1 1 120px; display: flex; flex-direction: column; gap: 1px; padding: 6px 10px; background: var(--panel); box-shadow: 0 0 0 2px var(--edge); font: inherit; color: inherit; text-align: left; border: 0; }
+.ss-item span { font-size: 10px; color: var(--dim); }
+.ss-item b { font-size: 14px; }
+.ss-item small { font-size: 10px; color: var(--dim); }
+.ss-item.bad { box-shadow: 0 0 0 2px #c0392b; }
+button.ss-item { cursor: pointer; }
+button.ss-item.ark-closed { box-shadow: 0 0 0 2px #c0392b; }
+.office-fold { display: flex; flex-direction: column; gap: 6px; }
+.fold-btn { align-self: flex-end; font: inherit; font-size: 10px; padding: 2px 8px; cursor: pointer; background: var(--ink); color: var(--dim); border: 0; box-shadow: 0 0 0 1px var(--edge); }
+.feed-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 22px; align-items: start; }
+.feed-pair .msg-list { height: 360px; }
+.feed-pair .news-win .news-list { max-height: 360px; }
+.right-tabs { display: flex; gap: 0; box-shadow: 0 0 0 2px var(--edge); position: sticky; top: 0; z-index: 5; }
+.right-tabs button { flex: 1; border: 0; padding: 7px 6px; cursor: pointer; background: var(--ink); color: var(--dim); font: inherit; font-size: 12px; }
+.right-tabs button.on { background: var(--amber); color: #141517; }
+.tab-pane { display: flex; flex-direction: column; gap: 26px; }
+@media (max-width: 1100px) {
+  .app { grid-template-areas: 'top' 'sched' 'status' 'left' 'right'; }
+  .feed-pair { grid-template-columns: 1fr; }
+}
+.sh-tbl { font-size: 10px; }
+.sh-tbl tr { cursor: pointer; }
+.sh-tbl td, .sh-tbl th { padding: 3px 2px; white-space: nowrap; }
+.shadow-win .wl-empty { margin-top: 4px; }
+.trade-list { list-style: none; margin: 4px 0; padding: 0; }
+.trade-list li { padding: 5px 2px; border-bottom: 1px dashed var(--edge); cursor: pointer; }
+.trade-list .tl-1 { display: flex; gap: 6px; align-items: baseline; font-size: 12px; }
+.trade-list .tl-1 .dim { font-size: 10px; }
+.trade-list .tl-pnl { margin-left: auto; white-space: nowrap; }
+.trade-list .tl-2 { font-size: 10px; margin-top: 2px; }
+
+/* 전략 승격: 목록 + 팝업 (모바일 가로 스크롤 없앰) */
+.cand-list { list-style: none; margin: 4px 0 8px; padding: 0; }
+.cand-list li button { width: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 6px 4px; font: inherit; text-align: left; cursor: pointer; background: transparent; color: inherit; border: 0; border-bottom: 1px dashed var(--edge); }
+.cand-list li button:hover { background: var(--ink); }
+.cand-list .cl-name { flex: 1 1 auto; min-width: 0; font-size: 11px; }
+.cand-list .cl-sum { flex: 1 1 100%; font-size: 10px; }
+.cand-list li.promoted .cl-name { color: var(--mint); }
+.cand-modal { max-width: min(520px, 94vw); }
+.cand-modal .modal-x { position: absolute; right: 10px; top: 8px; font: inherit; font-size: 18px; background: none; border: 0; color: var(--dim); cursor: pointer; }
+.cand-prof { width: 100%; font-size: 11px; margin: 6px 0; }
+.cand-prof tr.pass td { color: var(--mint); }
+.cand-prof tr.cur td { font-weight: bold; }
+.cand-kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; font-size: 11px; margin: 6px 0; }
+.cand-kv dt { color: var(--dim); }
+.cand-kv dd { margin: 0; }
+.cand-mode { display: flex; align-items: center; gap: 8px; font-size: 11px; margin-top: 8px; }
+@media (max-width: 640px) {
+  .stats { font-size: 10px; }
+  .right .stats th, .right .stats td { padding: 3px 2px; }
+}
+.cand-list .st-chip { flex: 0 0 auto; font-size: 10px; padding: 0 5px; border: 1px solid var(--edge); }
+.cand-list .st-chip.on { color: var(--ink); background: var(--mint); border-color: var(--mint); }
+.cand-list .st-chip.off { color: var(--red, #e06c6c); }
+.cand-list .st-chip.obs { color: var(--dim); }
+.cand-mob { display: none; }
+@media (max-width: 640px) {
+  .cand-pc { display: none !important; }
+  .cand-mob { display: initial; }
+  ul.cand-mob { display: block; }
+}
+.cand-grid td { vertical-align: middle; }
+.cand-grid td.n, .cand-grid th:nth-child(n+4):nth-child(-n+9) { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cand-grid td.pid { white-space: nowrap; }
+.cand-grid tr.grp td { border-top: 1px solid var(--edge); }
+.cand-grid tr.pass td.pid, .cand-grid tr.pass td.n { color: var(--mint); }
+.cand-grid tr.cur td.pid { font-weight: bold; }
+.cand-grid td.pid, .cand-grid th:nth-child(3) { text-align: left; padding-left: 8px; }
+.cand-grid td.n { padding-left: 6px; }
+.cand-grid th:nth-child(2), .cand-grid td[rowspan]:nth-child(2) { white-space: nowrap; }
+
+/* 가상 전용 종목 */
+.sh-uni { margin: 4px 0 8px; font-size: 11px; }
+.sh-uni-row { margin: 2px 0; display: flex; gap: 8px; }
+.sh-uni-row b { flex: 0 0 auto; color: var(--dim); font-weight: normal; }
+.sh-uni-row span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.sh-uni-edit { margin-left: 8px; font: inherit; font-size: 10px; padding: 0 6px; background: var(--ink); color: var(--text); border: 0; box-shadow: 0 0 0 1px var(--edge); cursor: pointer; }
+.sh-uni-form { display: grid; gap: 6px; padding: 6px; margin-top: 4px; box-shadow: 0 0 0 1px var(--edge); }
+.sh-uni-form label { display: flex; align-items: center; gap: 6px; }
+.sh-uni-form input:not([type=checkbox]) { flex: 1 1 auto; min-width: 0; font: inherit; font-size: 11px; padding: 2px 4px; background: var(--ink); color: var(--text); border: 0; box-shadow: 0 0 0 1px var(--edge); }
+.sh-uni-btns { display: flex; gap: 6px; }
+.sh-uni-btns button { font: inherit; font-size: 11px; padding: 2px 10px; background: var(--ink); color: var(--text); border: 0; box-shadow: 0 0 0 1px var(--edge); cursor: pointer; }
+
+/* 가상 탭 */
+.sh-sum { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 6px 8px; margin-bottom: 8px; font-size: 11px; color: var(--dim); box-shadow: 0 0 0 1px var(--edge); }
+.sh-sum b { color: var(--text); font-weight: normal; }
+.sh-cal .cal-d .v { font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.sh-cal .cal-d .p small { opacity: .7; font-size: 8px; }
+.sh-rank { width: 100%; font-size: 11px; margin-top: 6px; }
+.sh-rank caption { text-align: left; font-size: 11px; color: var(--dim); padding-bottom: 2px; }
+.sh-rank tr.dim td { color: var(--dim); }
+.sh-rank td small { font-size: 9px; }
+
+.sh-sum .rg-now { flex: 1 1 100%; }
+.rg-line { color: var(--dim); }
+.rg-line b { font-weight: normal; }
+.sh-cal .cal-d { position: relative; }
+.sh-cal .rg-dot { position: absolute; top: 2px; right: 3px; font-size: 9px; line-height: 1; }
+.sh-cal .cal-detail { font-size: 11px; }
+@media (max-width: 640px) {
+  .sh-rank th, .sh-rank td { padding: 3px 2px; font-size: 10px; }
+  .sh-rank .m-hide { display: none; }
+}

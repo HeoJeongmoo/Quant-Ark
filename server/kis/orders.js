@@ -175,3 +175,29 @@ export async function getOrderFills(client, { fromYmd, toYmd } = {}) {
     isCancel: r.rvse_cncl_dvsn === '02' || /취소/.test(r.rvse_cncl_dvsn_name || ''),
   }));
 }
+
+/**
+ * 해외주식 매수가능금액조회 [v1_해외주식-014]  GET /uapi/overseas-stock/v1/trading/inquire-psamount  (실전 TTTS3007R / 모의 VTTS3007R)
+ * 예수금이 있어도 미체결 매수 주문, 수수료, 결제 전 금액 때문에 실제로 살 수 있는 금액은 더 적을 수 있어 주문 직전에 확인한다.
+ */
+export async function getBuyingPower(client, { symbol, exchange = 'NASD', price }) {
+  const cfg = client.cfg;
+  const n = (v) => (v === undefined || v === null || v === '' ? null : Number(v));
+  const { body } = await client.get('/uapi/overseas-stock/v1/trading/inquire-psamount', {
+    trId: cfg.isReal ? 'TTTS3007R' : 'VTTS3007R',
+    params: { CANO: cfg.cano, ACNT_PRDT_CD: cfg.acntPrdtCd, OVRS_EXCG_CD: toOrderExchange(exchange), OVRS_ORD_UNPR: String(price), ITEM_CD: String(symbol).toUpperCase() },
+  });
+  const o = body.output || {};
+  return {
+    currency: o.tr_crcy_cd || 'USD',
+    orderableUsd: n(o.ord_psbl_frcr_amt), // 주문가능외화금액
+    sellReuseUsd: n(o.sll_ruse_psbl_amt), // 매도 재사용 가능 금액
+    overseasOrderable: n(o.ovrs_ord_psbl_amt), // 해외주문가능금액
+    qty: n(o.ord_psbl_qty), // 주문가능수량 (외화 기준)
+    maxQty: n(o.max_ord_psbl_qty), // 최대주문가능수량
+    afterExchangeUsd: n(o.echm_af_ord_psbl_amt), // 원화 환전 후 주문가능금액 (통합증거금)
+    afterExchangeQty: n(o.echm_af_ord_psbl_qty),
+    exchangeRate: n(o.exrt),
+    raw: o,
+  };
+}
