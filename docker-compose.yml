@@ -1,0 +1,30 @@
+# docker compose up -d --build   → 백그라운드 상시 가동
+# docker compose logs -f         → 봇 로그 보기
+# docker compose down            → 끄기 (data/ 기록은 남음)
+services:
+  quant-office:
+    build: .
+    image: quant-office:latest
+    container_name: quant-office
+    restart: always # 꺼지거나 오류로 죽으면 자동 재시작, PC 재부팅 후 Docker가 켜지면 같이 시작
+    env_file: .env # APP_KEY, APP_SECRET, CANO, ANTHROPIC_API_KEY ... (이미지 안에는 넣지 않음)
+    environment:
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8787
+      TZ: Asia/Seoul
+    ports:
+      - "127.0.0.1:8787:8787" # 내 PC에서만 접속 가능 (외부 공개 안 함)
+    volumes:
+      - ./data:/app/data
+      - ./.kis-cache:/app/.kis-cache
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8787/api/bot/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

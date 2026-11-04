@@ -1,0 +1,11 @@
+node_modules
+dist
+data
+.kis-cache
+.env
+.env.*
+!.env.example
+*.zip
+*.cjs
+*.png
+.git

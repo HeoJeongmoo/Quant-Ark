@@ -1,0 +1,49 @@
+# 외부 네트워크에서도 접속 (Tailscale 사설망, 내 기기만)
+#   1) .env에 TS_AUTHKEY=tskey-auth-... 넣기 (Tailscale 관리 페이지 → Settings → Keys → Generate auth key)
+#   2) docker compose -f docker-compose.tailscale.yml up -d --build
+#   3) 휴대폰 Tailscale 앱 로그인 후 https://quant-office.<내 tailnet>.ts.net 접속
+# 기존 docker-compose.yml로 띄운 컨테이너가 있으면 먼저 docker compose down
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: quant-office-ts
+    hostname: quant-office # 접속 주소의 앞부분
+    restart: always
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:?.env에 TS_AUTHKEY를 넣으세요}
+      TS_STATE_DIR: /var/lib/tailscale # 로그인 상태 저장 (처음 한 번만 키 사용)
+      TS_SERVE_CONFIG: /config/serve.json # tailnet 안에서만 HTTPS로 봇 화면 제공 (Funnel 공개 꺼짐)
+      TS_USERSPACE: "true"
+    volumes:
+      - ./data/tailscale:/var/lib/tailscale
+      - ./tailscale:/config:ro
+    ports:
+      - "127.0.0.1:8787:8787" # 이 PC에서는 기존처럼 http://localhost:8787
+
+  quant-office:
+    build: .
+    image: quant-office:latest
+    container_name: quant-office
+    restart: always
+    network_mode: service:tailscale # Tailscale 컨테이너와 네트워크 공유 → serve가 127.0.0.1:8787로 연결
+    depends_on:
+      - tailscale
+    env_file: .env
+    environment:
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8787
+      TZ: Asia/Seoul
+    volumes:
+      - ./data:/app/data
+      - ./.kis-cache:/app/.kis-cache
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8787/api/bot/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

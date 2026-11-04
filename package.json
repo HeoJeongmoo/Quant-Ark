@@ -1,0 +1,40 @@
+{
+  "name": "quant-office",
+  "version": "1.0.0",
+  "description": "Pixel Agents 스타일 AI 주식 매매 오피스 (한국투자증권 Open API, 서버 상주 봇)",
+  "scripts": {
+    "dev": "node dev.mjs",
+    "build": "node build.mjs",
+    "server": "node server/index.js",
+    "start": "node server/index.js",
+    "docker:up": "docker compose up -d --build",
+    "docker:logs": "docker compose logs -f --tail=200",
+    "docker:down": "docker compose down",
+    "kis:check": "node server/kis/check.js",
+    "llm:check": "node server/llm/check.js",
+    "kis:scan": "node server/kis/scan-check.js",
+    "test:stier": "node tests/stier.test.mjs",
+    "test:bot": "node tests/bot.test.mjs",
+    "docker:ts": "docker compose -f docker-compose.tailscale.yml up -d --build",
+    "docker:ts:down": "docker compose -f docker-compose.tailscale.yml down",
+    "news:check": "node server/news/check.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^18.0.9",
+    "ws": "^8.22.1"
+  },
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "galmuri": "^2.40.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}
