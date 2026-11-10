@@ -15,8 +15,6 @@
     "kis:scan": "node server/kis/scan-check.js",
     "test:stier": "node tests/stier.test.mjs",
     "test:bot": "node tests/bot.test.mjs",
-    "docker:ts": "docker compose -f docker-compose.tailscale.yml up -d --build",
-    "docker:ts:down": "docker compose -f docker-compose.tailscale.yml down",
     "news:check": "node server/news/check.js",
     "kis:power": "node server/kis/power-check.js"
   },

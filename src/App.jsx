@@ -25,7 +25,7 @@ const EMPTY_MSG = '관심 종목 없음 · 종목 추가 필요';
 const ACTION_LABEL = { HOLD: '보유', TRIM: '부분 익절', EXIT_STOP: '손절', EXIT_TAKE: '익절' };
 const levelOf = (j) => (j.action !== 'HOLD' ? 'exit' : j.pressure >= 2 ? 'watch' : 'calm');
 
-// 봇 서버 주소: 봇 서버가 화면을 직접 띄운 경우(localhost:8787, 내부 IP, Tailscale 주소 등) 항상 같은 주소를 쓴다.
+// 봇 서버 주소: 봇 서버가 화면을 직접 띄운 경우(localhost:8787, 내부 IP, 클라우드 서버 주소 등) 항상 같은 주소를 쓴다.
 // 개발 서버(:5173)나 파일로 연 경우만 저장값(kisApi) → 127.0.0.1:8787
 const KIS_API = (() => {
   if (typeof location !== 'undefined' && /^https?:$/.test(location.protocol) && location.port !== '5173') return location.origin;
