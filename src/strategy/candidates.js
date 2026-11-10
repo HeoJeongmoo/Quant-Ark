@@ -10,6 +10,9 @@
 //   L VWAP 2σ 되돌림  VWAP −2σ 아래로 마감한 뒤 다시 밴드 안으로 양봉 마감
 //   M 홀리 그레일     (린다 라쉬키) ADX 30↑ 상승 추세에서 20 EMA 첫 눌림 → 직전 봉 고가 돌파
 //   N DTFX           구조 전환(직전 고점 종가 돌파) 뒤 상승폭 50~70% 되돌림 구간에서 양봉 재상승
+//   O 상대강도 신고가  QQQ가 그 시점 마이너스인데 종목은 +1%↑ · 당일 고가를 거래량 1.5배↑ 양봉으로 돌파 (10시 이후)
+//   P VWAP 첫 눌림    09:45 이후 계속 VWAP 위 → 10:30 이후 처음 VWAP까지 눌림 → 직전 봉 고가 돌파 양봉
+//   Q ORB 리테스트    첫 15분 고가를 돌파한 뒤 처음으로 그 고가(+0.3% 이내)까지 되돌아와 지지 → 직전 봉 고가 돌파 양봉 (11:30까지)
 // 한 번 붙인 알파벳은 영구 (은퇴해도 다른 전략에 다시 쓰지 않음)
 
 const bullish = (c) => c.c > c.o;
@@ -28,9 +31,14 @@ export const CANDIDATES = {
   L: { id: 'L', name: 'VWAP 2σ 되돌림', prior: { win: 0.5, payoff: 1.3 } },
   M: { id: 'M', name: '홀리 그레일', prior: { win: 0.47, payoff: 1.5 } },
   N: { id: 'N', name: 'DTFX', prior: { win: 0.45, payoff: 1.6 } },
+  O: { id: 'O', name: '상대강도 신고가', prior: { win: 0.45, payoff: 1.6 } },
+  P: { id: 'P', name: 'VWAP 첫 눌림', prior: { win: 0.5, payoff: 1.4 } },
+  Q: { id: 'Q', name: 'ORB 리테스트', prior: { win: 0.47, payoff: 1.5 } },
 };
 // 등록 순서 = 대기열 순서 (A~I 다음 J부터)
-export const STRATEGY_ORDER = ['A', 'B', 'C', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N'];
+export const STRATEGY_ORDER = ['A', 'B', 'C', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q'];
+// 대기열 투입 순서 (알파벳과 별개). 아직 한 번도 안 돈 전략만 순서를 바꿀 수 있음
+export const QUEUE_ORDER = ['O', 'P', 'L', 'Q', 'M', 'N'];
 
 // 청산 규칙 3종: 같은 진입이라도 청산이 성적을 크게 가른다
 export const EXIT_PROFILES = {
@@ -303,6 +311,66 @@ export function checkN(closed, piv = 3) {
   return no('N', '구조 전환 없음');
 }
 
+export function checkO(session, prevClose, mkt = {}) {
+  const n = session.length;
+  if (n < 7) return no('O', '오늘 봉 7개 미만');
+  if (!(prevClose > 0)) return no('O', '전일 종가 없음');
+  const last = session[n - 1];
+  const t = hhmm(last);
+  if (t < '10:00') return no('O', '10시 전');
+  const q = mkt.qqqChg;
+  if (!Number.isFinite(q)) return no('O', 'QQQ 등락률 없음');
+  const chg = (last.c / prevClose - 1) * 100;
+  if (!(q < 0)) return no('O', `QQQ ${round(q, 2)}% (마이너스 아님)`);
+  if (!(chg >= 1)) return no('O', `종목 ${round(chg, 2)}% (+1% 미만)`);
+  const hod = Math.max(...session.slice(0, -1).map((b) => b.h));
+  const volOk = (last.v || 0) >= avgVol(session.slice(-11, -1)) * 1.5;
+  const fired = last.c > hod && bullish(last) && volOk;
+  return { id: 'O', fired, detail: `QQQ ${round(q, 2)}%인데 +${round(chg, 2)}% · 당일 고가 $${round(hod)} 돌파`, reason: last.c <= hod ? '당일 고가 아래' : !bullish(last) ? '음봉' : '거래량 부족', metrics: { qqq: round(q, 2), rs: round(chg - q, 2) } };
+}
+
+export function checkP(session) {
+  const n = session.length;
+  if (n < 13) return no('P', '오늘 봉 13개 미만');
+  const last = session[n - 1];
+  const prev = session[n - 2];
+  if (hhmm(prev) < '10:30') return no('P', '10:30 전');
+  // 봉마다 그 시점까지의 VWAP
+  const vw = [];
+  let pv = 0;
+  let vv = 0;
+  for (const b of session) {
+    pv += ((b.h + b.l + b.c) / 3) * (b.v || 0);
+    vv += b.v || 0;
+    vw.push(vv > 0 ? pv / vv : null);
+  }
+  if (vw.some((x) => x == null)) return no('P', '거래량 없음');
+  // 09:45(4번째 봉)부터 눌림 직전까지 종가가 계속 VWAP 위, 저가도 VWAP을 건드린 적 없음
+  for (let i = 3; i < n - 2; i++) if (!(session[i].c > vw[i]) || session[i].l <= vw[i] * 1.001) return no('P', '오전 내내 VWAP 위가 아님 또는 이미 눌린 적 있음');
+  const touched = prev.l <= vw[n - 2] * 1.001 && prev.c >= vw[n - 2] * 0.998;
+  if (!touched) return no('P', 'VWAP 눌림 아님');
+  const fired = bullish(last) && last.c > prev.h;
+  return { id: 'P', fired, detail: `오전 내내 VWAP 위 → VWAP $${round(vw[n - 2])} 첫 눌림 반등`, reason: fired ? null : '직전 봉 고가 돌파 대기', metrics: { vwap: round(vw[n - 2]) } };
+}
+
+export function checkQ(session) {
+  const n = session.length;
+  if (n < 6) return no('Q', '오늘 봉 6개 미만');
+  const last = session[n - 1];
+  const prev = session[n - 2];
+  if (hhmm(last) > '11:30') return no('Q', '11:30 이후');
+  const orh = Math.max(...session.slice(0, 3).map((b) => b.h));
+  const brk = session.findIndex((b, i) => i >= 3 && b.c > orh);
+  if (brk < 0 || brk > n - 3) return no('Q', '첫 15분 고가 돌파 없음');
+  // 돌파 뒤 ~ 직전 봉 앞까지는 고가 근처로 안 내려옴 (첫 리테스트만), 종가가 고가 아래로 무너진 적도 없음
+  const mid = session.slice(brk + 1, n - 2);
+  if (mid.some((b) => b.l <= orh * 1.003)) return no('Q', '이미 리테스트함');
+  const retest = prev.l <= orh * 1.003 && prev.c >= orh;
+  if (!retest) return no('Q', prev.c < orh ? '고가 아래로 무너짐' : '리테스트 대기');
+  const fired = bullish(last) && last.c > prev.h;
+  return { id: 'Q', fired, detail: `첫 15분 고가 $${round(orh)} 돌파 후 첫 리테스트 지지`, reason: fired ? null : '직전 봉 고가 돌파 대기', metrics: { orh: round(orh) } };
+}
+
 const CHECKS = {
   E: ({ session }) => checkE(session),
   F: ({ session }) => checkF(session),
@@ -314,9 +382,12 @@ const CHECKS = {
   L: ({ session }) => checkL(session),
   M: ({ closed }) => checkM(closed),
   N: ({ closed }) => checkN(closed),
+  O: ({ session, prevClose, mkt }) => checkO(session, prevClose, mkt),
+  P: ({ session }) => checkP(session),
+  Q: ({ session }) => checkQ(session),
 };
 
 /** 후보 전략 판정. session = 오늘 정규장 마감봉, closed = 전일 포함 마감봉, active = 지금 후보 자리에 있는 전략만 */
-export function evaluateCandidates({ session, closed, prevClose, active = ['E', 'F', 'G', 'H', 'I'] }) {
-  return active.filter((id) => CHECKS[id]).map((id) => CHECKS[id]({ session, closed, prevClose }));
+export function evaluateCandidates({ session, closed, prevClose, mkt = {}, active = ['E', 'F', 'G', 'H', 'I'] }) {
+  return active.filter((id) => CHECKS[id]).map((id) => CHECKS[id]({ session, closed, prevClose, mkt }));
 }

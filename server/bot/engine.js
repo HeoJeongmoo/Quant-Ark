@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { marketPhase, barStart, clockNow } from './session.js';
+import { marketPhase, barStart, clockNow, closeHHMM } from './session.js';
 import { createExecutor } from './executor.js';
 import { judgeExit, ACTION_LABEL } from './moses.js';
 import * as journal from './journal.js';
@@ -23,6 +23,8 @@ import { evaluateSTier, sizePosition, closedOnly, sessionInfo, ALL_STRATEGIES as
 import { evaluateCandidates, EXIT_PROFILES } from '../../src/strategy/candidates.js';
 import { evaluatePromotions, evaluateRetirements } from './promotion.js';
 import { createRegistry } from './registry.js';
+import { judgeShadow } from './shadowJudge.js';
+import { LEVELS as DD_LEVELS, loadDrawdown, saveDrawdown, evaluateDrawdown, releaseDrawdown, resetPeak } from './drawdown.js';
 import { qqqRegime, breadthOf, snap as regimeSnap, SECTOR_ETFS, BREADTH_EXTRA, ETF_EX } from './regime.js';
 
 const SETTINGS_FILE = path.resolve(process.env.BOT_SETTINGS_FILE || 'data/bot-settings.json');
@@ -114,11 +116,16 @@ const DEFAULT_SETTINGS = {
     maxMovePct: 12, // 예상 변동폭이 이보다 크면 매수 안 함 (급등락 잡주·이벤트 종목)
     // --- 계좌 보호 잠금 (3번) ---
     dailyLossPct: 5, // 오늘 계좌 손실이 이만큼이면 그날 매매 셧다운
+    ddEnabled: true, // 누적 손실 방어 (최근 고점 대비)
+    dd1Pct: 8, // 1단계 방어: 비중 ½, 동시 보유 2
+    dd2Pct: 12, // 2단계 최소: 비중 ¼, 동시 보유 1, D만
+    dd3Pct: 15, // 3단계 정지: 신규 매수 중지 (직접 풀기)
+    ddLookbackDays: 20, // 고점을 찾는 기간 (거래일)
     maxPositions: 3, // 동시 보유 종목 최대 개수
     flattenOnShutdown: true, // 셧다운 시 봇 포지션 청산
   },
   discoverEveryMin: 5,
-  strategyModes: { A: 'auto', B: 'auto', C: 'auto', D: 'auto', E: 'auto', F: 'auto', G: 'auto', H: 'auto', I: 'auto', J: 'auto', K: 'auto', L: 'auto', M: 'auto', N: 'auto' }, // auto: 성과로 자동, on: 항상 켬, off: 항상 끔
+  strategyModes: { A: 'auto', B: 'auto', C: 'auto', D: 'auto', E: 'auto', F: 'auto', G: 'auto', H: 'auto', I: 'auto', J: 'auto', K: 'auto', L: 'auto', M: 'auto', N: 'auto', O: 'auto', P: 'auto', Q: 'auto' }, // auto: 성과로 자동, on: 항상 켬, off: 항상 끔
   version: SETTINGS_VERSION,
 };
 
@@ -229,6 +236,7 @@ export function createBot({ kis, llm }) {
       }
     })(),
     shadowUniAt: 0,
+    dd: loadDrawdown(),
     regime: { date: null, qqq: null, breadth: null, at: 0 },
     regimeDays: (() => {
       try {
@@ -414,6 +422,7 @@ export function createBot({ kis, llm }) {
       S.accountFails = 0;
       const ph0 = marketPhase();
       if (ph0.phase !== 'closed') equity.record(ph0.ny.ymd, a.totals?.total);
+      if (ph0.phase !== 'closed') updateDrawdown(ph0.ny.ymd, a.totals?.total);
       await updateGuard();
       const lastPrice = Object.fromEntries([...S.tickers.values()].map((t) => [t.symbol, t.price]));
       const closed = journal.reconcile(a.holdings, env, lastPrice, exec.busySymbols());
@@ -538,6 +547,22 @@ export function createBot({ kis, llm }) {
     saveRegimeDays();
   }
 
+  // 누적 손실 방어 단계 갱신 (계좌를 조회할 때마다)
+  function updateDrawdown(ymd, total) {
+    const R0 = settings.rules;
+    if (R0.ddEnabled === false) return;
+    const { s, changed, from } = evaluateDrawdown(S.dd, { ymd, total, days: equity.allDays(), th: [R0.dd1Pct, R0.dd2Pct, R0.dd3Pct], lookback: R0.ddLookbackDays });
+    S.dd = s;
+    if (changed) {
+      const L = DD_LEVELS[s.level];
+      const worse = s.level > from;
+      const what = s.level === 0 ? '원래 규칙으로 복귀' : s.level === 3 ? '신규 매수 중지 (설정 탭에서 직접 풀기)' : `매수 비중 ${L.weight * 100}% · 동시 보유 ${L.maxPos}종목${L.onlyD ? ' · D만' : ''}`;
+      emit('guard', 'kang', `누적 손실 ${worse ? '방어 강화' : '방어 완화'}: ${DD_LEVELS[from].name} → ${L.name} (고점 $${s.peak} 대비 ${s.ddPct}%) · ${what}`, { drawdown: s }, worse ? 'warn' : 'info');
+    }
+    saveDrawdown(S.dd);
+  }
+  const ddLevel = () => (settings.rules.ddEnabled === false ? DD_LEVELS[0] : DD_LEVELS[S.dd.level || 0]);
+
   function enterEmergency(what, why) {
     if (S.emergency) return;
     S.emergency = what;
@@ -595,13 +620,17 @@ export function createBot({ kis, llm }) {
     if (ph.minutesToClose != null && ph.minutesToClose <= settings.rules.noEntryLastMin) return block('na', `마감 ${ph.minutesToClose}분 전`);
     if (exec.busySymbols().has(t.symbol)) return block('trA', '같은 종목 주문 진행 중');
     if (S.guard.shutdown) return block('kang', `계좌 보호 셧다운: ${S.guard.reason}`);
+    const DL = ddLevel();
+    if (DL.level === 3) return block('kang', `누적 손실 정지: 고점 대비 ${S.dd.ddPct}% (설정 탭에서 직접 풀기)`);
     const R0 = settings.rules;
     const heldNow = heldSymbols();
     const pending = new Set(exec.active().filter((o) => o.side === 'buy').map((o) => o.symbol));
     const slots = new Set([...heldNow, ...pending]);
-    if (!slots.has(t.symbol) && slots.size >= R0.maxPositions) return block('kang', `동시 보유 한도 ${R0.maxPositions}종목 (현재 ${slots.size})`);
+    const maxPos = DL.maxPos != null ? Math.min(R0.maxPositions, DL.maxPos) : R0.maxPositions;
+    if (!slots.has(t.symbol) && slots.size >= maxPos) return block('kang', `동시 보유 한도 ${maxPos}종목 (현재 ${slots.size})${maxPos < R0.maxPositions ? ` · 누적 손실 ${DL.name} 단계` : ''}`);
     // 비용을 넘을 만큼 움직이는 종목인가: 5분봉 ATR% × √보유봉수 ≥ 목표 수익
     const isD = r.hits.some((h) => h.id === 'D');
+    if (DL.onlyD && !isD) return block('kang', `누적 손실 ${DL.name} 단계: D 외 전략 매수 멈춤 (고점 대비 ${S.dd.ddPct}%)`);
     const dHit = r.hits.find((h) => h.id === 'D');
     const promoHit = r.hits.find((h) => h.promoted && h.exit);
     const closed0 = closedOnly(t.candles, clockNow());
@@ -678,8 +707,14 @@ export function createBot({ kis, llm }) {
       w = Math.min(pct / 100, room);
       how = `${tier} · 비중 ${(w * 100).toFixed(0)}%${w < pct / 100 ? ` (종목당 한도 ${R0.maxW}%)` : ''}`;
     }
+    if (DL.weight < 1) {
+      w *= DL.weight;
+      how += ` · 누적 손실 ${DL.name} 단계 ×${DL.weight}`;
+    }
     let qty = Math.floor((total * w) / t.price);
     let oneShare = false;
+    // 방어 단계에서는 "0주면 1주"를 쓰지 않음 (줄인 비중보다 크게 사는 걸 막음)
+    if (qty < 1 && DL.level >= 1) return block('kang', `누적 손실 ${DL.name} 단계: 줄인 비중 ${(w * 100).toFixed(1)}%로는 1주($${t.price})도 못 삼`);
     if (qty < 1 && t.price <= total * room) {
       qty = 1;
       oneShare = true;
@@ -840,78 +875,50 @@ export function createBot({ kis, llm }) {
     saveShadows();
   }
   const loadShadowRecent = () => journal.dedupeShadows(journal.readLines('shadow', { limit: 300 }).reverse().filter((x) => (!x.env || x.env === env) && !x.skipped)).slice(0, 40).map((x) => ({ symbol: x.symbol, strategies: x.strategies, profile: x.profile || null, entry: x.entryFill ?? x.entry, exit: x.exit, why: x.why, pnlPct: x.pnlPct, bars: x.bars, openedAt: x.openedAt, closedAt: x.closedAt }));
-  async function evaluateShadows() {
+  // sweep = 장 마감 뒤 정리: 종목마다 5분봉을 새로 받아 남은 가상 거래를 전부 평가 (정규장 중에는 봉이 닫힐 때마다 일부만)
+  async function evaluateShadows({ sweep = false } = {}) {
     if (!S.shadows.length) return;
     let fetched = 0;
     let filled = false;
     const done = [];
+    const fresh = new Map();
     for (const x of S.shadows) {
-      let cs = S.tickers.get(x.symbol)?.candles;
-      if ((!cs || !cs.some((k) => k.t > x.barT)) && fetched < 5) {
+      let cs = fresh.get(x.symbol) || S.tickers.get(x.symbol)?.candles;
+      if (sweep && !fresh.has(x.symbol) && fetched < 60) {
+        fetched++;
+        cs = (await kis.getMinuteCandles(x.symbol, x.exchange, { interval: 5, count: 120 }).then((r) => r.map(toBar)).catch(() => cs || []));
+        fresh.set(x.symbol, cs);
+      } else if ((!cs || !cs.some((k) => k.t > x.barT)) && fetched < 5) {
         fetched++;
         cs = (await kis.getMinuteCandles(x.symbol, x.exchange, { interval: 5, count: 120 }).catch(() => [])).map(toBar);
       }
-      const after = closedOnly(cs || [], clockNow()).filter((k) => k.t > x.barT);
-      // 보수적 체결 가정 (실제 주문 방식에 맞춤)
-      //   진입: 신호 다음 봉 시가 + 미끄러짐. 시가가 신호가 +0.3%(실제 매수 지정가 상한)를 넘으면 실제로도 못 샀을 것 → 미체결로 버림
-      //   손절: 손절가 − 미끄러짐, 시가부터 손절가 아래로 갭이 나면 시가 − 미끄러짐 / 같은 봉에서 손절·목표가 모두 닿으면 손절로 봄
-      //   목표: 고가가 목표가를 0.05% 넘어서야 체결 (딱 닿기만 한 건 못 판 것으로)
       const R0 = settings.rules;
-      const eSlip = (R0.shadowEntrySlipPct ?? 0.1) / 100;
-      const sSlip = (R0.shadowStopSlipPct ?? 0.2) / 100;
-      let exit = null;
-      let why = '';
-      let n = 0;
-      let entry = x.fill || null;
-      for (const k of after) {
-        if (entry == null) {
-          if (k.o > x.entry * 1.003) {
-            journal.recordShadow({ ...x, kind: 'missed', origKind: x.kind || null, exit: null, bars: 0, why: '미체결 (시가가 매수 상한 +0.3% 초과)', pnlPct: null, skipped: true, closedAt: new Date(k.t).toISOString() });
-            done.push(x.id);
-            exit = 'skip';
-            break;
-          }
-          entry = k.o * (1 + eSlip);
-          x.fill = entry;
-          filled = true;
-        }
-        n++;
-        const stop = entry * (1 - x.slPct / 100);
-        const target = entry * (1 + x.tpPct / 100);
-        const day = k.time ? k.time.slice(0, 10) : null;
-        if (k.o <= stop && n > 1) {
-          exit = k.o * (1 - sSlip);
-          why = '손절 (갭)';
-        } else if (k.l <= stop) {
-          exit = stop * (1 - sSlip);
-          why = '손절';
-        } else if (k.h >= target * 1.0005) {
-          exit = target;
-          why = '목표';
-        } else if (n >= x.holdBars) {
-          exit = k.c * (1 - eSlip);
-          why = '보유 시간 만료';
-        } else if (k.time && k.time.slice(11) >= '15:55') {
-          exit = k.c * (1 - eSlip);
-          why = '장 마감';
-        } else if (day && day > new Date(x.barT).toISOString().slice(0, 10) && n === 1) {
-          exit = k.o * (1 - eSlip);
-          why = '장 마감';
-        }
-        if (exit != null) {
-          const pnlPct = Math.round(((exit / entry - 1) * 100 - x.cost) * 1000) / 1000;
-          journal.recordShadow({ ...x, model: 'conservative', entryFill: Math.round(entry * 10000) / 10000, exit: Math.round(exit * 10000) / 10000, bars: n, why, pnlPct, closedAt: new Date(k.t + 5 * 60_000).toISOString() });
-          done.push(x.id);
-          break;
-        }
+      const after = closedOnly(cs || [], clockNow()).filter((k) => k.t > x.barT);
+      const entryDay = journal.shadowYmd(x);
+      const j = judgeShadow(x, after, { eSlip: (R0.shadowEntrySlipPct ?? 0.1) / 100, sSlip: (R0.shadowStopSlipPct ?? 0.2) / 100, entryDay, closeAt: closeHHMM(entryDay) });
+      if (j.kind === 'missed') {
+        journal.recordShadow({ ...x, kind: 'missed', origKind: x.kind || null, exit: null, bars: 0, why: j.why, pnlPct: null, skipped: true, closedAt: new Date(j.closedAtMs).toISOString() });
+        done.push(x.id);
+        continue;
       }
-      if (exit === 'skip') continue;
-      if (exit == null && clockNow() - x.barT > 3 * 86400_000) done.push(x.id); // 봉을 못 받는 종목은 3일 뒤 버림
+      if (j.kind === 'closed') {
+        const pnlPct = Math.round(((j.exit / j.entry - 1) * 100 - x.cost) * 1000) / 1000;
+        journal.recordShadow({ ...x, model: 'conservative', entryFill: Math.round(j.entry * 10000) / 10000, exit: Math.round(j.exit * 10000) / 10000, bars: j.bars, why: j.why, pnlPct, closedAt: new Date(j.closedAtMs).toISOString() });
+        done.push(x.id);
+        continue;
+      }
+      if (j.fill && !x.fill) {
+        x.fill = j.fill;
+        filled = true;
+      }
+      if (clockNow() - x.barT > 3 * 86400_000) done.push(x.id); // 봉을 못 받는 종목은 3일 뒤 버림
     }
+    if (filled && !done.length) saveShadows();
     if (done.length) {
       S.shadows = S.shadows.filter((x) => !done.includes(x.id));
       saveShadows();
       S.shadowRecent = loadShadowRecent();
+      refreshHealth(); // 승격 표·전략 상태를 방금 청산된 기록까지 반영 (장 마감 정리 뒤에도)
     }
   }
 
@@ -965,7 +972,7 @@ export function createBot({ kis, llm }) {
       const lastIsToday = last.time && last.time.startsWith(ymd) && last.time.slice(11) >= '09:30' && last.time.slice(11) < '16:00';
       if (R0.candidates && lastIsToday) {
         const session = closed.filter((k) => k.time && k.time.startsWith(ymd) && k.time.slice(11) >= '09:30' && k.time.slice(11) < '16:00');
-        cands = evaluateCandidates({ session, closed, prevClose: t.prevClose, active: registry.active().filter((id) => !'ABC'.includes(id)) });
+        cands = evaluateCandidates({ session, closed, prevClose: t.prevClose, mkt: { qqqChg: S.index?.changePct ?? null }, active: registry.active().filter((id) => !'ABC'.includes(id)) });
         const fired = [...abcFired, ...cands.filter((c) => c.fired)];
         const shadowOk = t.list === 'shadow' || t.shadowAlso || (t.list === 'gap' && R0.shadowGap !== false); // 관심 종목·AI 추천은 가상 기록 안 함
         if (shadowOk && fired.length && S.candHandled[t.symbol] !== r.barKey && shadowTimeOk()) {
@@ -1367,6 +1374,20 @@ export function createBot({ kis, llm }) {
       await scanSignals();
     } else if (open && now - (S.index.at || 0) > 30_000) await refreshIndex(false);
 
+    // 장 마감 뒤: 남은 가상 거래 정리 (마감 봉은 16:00에 닫혀 정규장 판정 때 놓침). 마감 2분 뒤부터 10분마다, 다 끝날 때까지
+    if (!open && S.shadows.length && !S.shadowSweepBusy && now - (S.shadowSweepAt || 0) > 10 * 60_000 && (ph.phase !== 'post' || ph.ny.min >= ph.closeMin + 2 || ph.ny.min < 9 * 60)) {
+      S.shadowSweepBusy = true;
+      S.shadowSweepAt = now;
+      const before = S.shadows.length;
+      evaluateShadows({ sweep: true })
+        .then(() => {
+          const closedN = before - S.shadows.length;
+          if (closedN > 0) emit('shadow', 'kang', `장 마감 정리: 가상 거래 ${closedN}건 청산${S.shadows.length ? ` · ${S.shadows.length}건 남음 (봉 대기)` : ''}`, {}, 'info');
+        })
+        .catch((e) => emit('error', 'system', `가상 거래 마감 정리 오류: ${e.message}`, {}, 'warn'))
+        .finally(() => (S.shadowSweepBusy = false));
+    }
+
     if (open) {
       if (S.guard.shutdown && settings.rules.flattenOnShutdown && !S.guard.flattened) {
         S.guard.flattened = true;
@@ -1437,6 +1458,7 @@ export function createBot({ kis, llm }) {
       health: S.health,
       promo: S.promo,
       promoBar: S.promoBar || null,
+      drawdown: { ...S.dd, enabled: settings.rules.ddEnabled !== false, name: ddLevel().name, weight: ddLevel().weight, maxPos: ddLevel().maxPos, th: [settings.rules.dd1Pct, settings.rules.dd2Pct, settings.rules.dd3Pct] },
       registry: registry.view(),
       news: samuel.status(),
       shadowOpen: S.shadows.length,
@@ -1463,6 +1485,15 @@ export function createBot({ kis, llm }) {
     const next = structuredClone(settings);
     for (const k of ['autoTrade', 'david', 'useAi']) if (typeof patch[k] === 'boolean') next[k] = patch[k];
     if (patch.control === 'auto' || patch.control === 'manual') next.control = patch.control;
+    // 누적 손실 방어: 정지 풀기 / 고점 다시 잡기 (입출금한 날)
+    if (patch.ddAction === 'release' || patch.ddAction === 'reset') {
+      const ymd = marketPhase().ny.ymd;
+      const before = S.dd.level || 0;
+      S.dd = patch.ddAction === 'release' ? releaseDrawdown(S.dd, ymd) : resetPeak(S.dd, ymd, S.account?.totals?.total || 0);
+      if (patch.ddAction === 'reset' && S.account?.totals?.total) S.dd = evaluateDrawdown(S.dd, { ymd, total: S.account.totals.total, days: equity.allDays(), th: [settings.rules.dd1Pct, settings.rules.dd2Pct, settings.rules.dd3Pct], lookback: settings.rules.ddLookbackDays }).s;
+      saveDrawdown(S.dd);
+      emit('guard', 'kang', patch.ddAction === 'release' ? `누적 손실 정지 해제 (사용자): ${DD_LEVELS[before].name} → ${DD_LEVELS[S.dd.level].name}` : `누적 손실 고점 다시 잡기 (사용자): 기준 $${S.dd.peak}`, { drawdown: S.dd }, 'warn');
+    }
     if (patch.strategyModes && typeof patch.strategyModes === 'object') for (const id of Object.keys(STRATEGIES)) if (['auto', 'on', 'off'].includes(patch.strategyModes[id])) next.strategyModes = { ...next.strategyModes, [id]: patch.strategyModes[id] };
     if (Number.isFinite(+patch.discoverEveryMin)) next.discoverEveryMin = Math.min(60, Math.max(3, Math.round(+patch.discoverEveryMin)));
     if (patch.rules && typeof patch.rules === 'object') {
@@ -1492,6 +1523,11 @@ export function createBot({ kis, llm }) {
       if (typeof R.candidates === 'boolean') next.rules.candidates = R.candidates;
       if (Number.isFinite(+R.promoteMin)) next.rules.promoteMin = Math.min(500, Math.max(10, Math.round(+R.promoteMin)));
       set('promoteExp', num(R.promoteExp, 0, 5));
+      if (typeof R.ddEnabled === 'boolean') next.rules.ddEnabled = R.ddEnabled;
+      set('dd1Pct', num(R.dd1Pct, 1, 50));
+      set('dd2Pct', num(R.dd2Pct, 2, 60));
+      set('dd3Pct', num(R.dd3Pct, 3, 80));
+      if (Number.isFinite(+R.ddLookbackDays)) next.rules.ddLookbackDays = Math.min(120, Math.max(3, Math.round(+R.ddLookbackDays)));
       if (Number.isFinite(+R.promoteBaseSlots)) next.rules.promoteBaseSlots = Math.min(20, Math.max(1, Math.round(+R.promoteBaseSlots)));
       if (Number.isFinite(+R.retireMin)) next.rules.retireMin = Math.min(1000, Math.max(40, Math.round(+R.retireMin)));
       if (Number.isFinite(+R.retireDays)) next.rules.retireDays = Math.min(250, Math.max(5, Math.round(+R.retireDays)));

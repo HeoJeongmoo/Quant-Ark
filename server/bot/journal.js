@@ -14,7 +14,7 @@ const DIR = path.resolve(process.env.JOURNAL_DIR || 'data/journal');
 const POS_FILE = path.resolve(process.env.BOT_POSITIONS_FILE || 'data/bot-positions.json');
 // 매매 수수료(한 방향, %). KIS 체결가에는 수수료가 빠져 있어 손익 계산 때 직접 뺀다
 const FEE = Number(process.env.KIS_FEE_PCT || 0.25) / 100;
-const IDS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N']; // S티어 + 후보 전략
+const IDS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q']; // S티어 + 후보 전략
 const ensure = (f) => fs.mkdirSync(path.dirname(f), { recursive: true });
 const FILES = { fills: path.join(DIR, 'fills.jsonl'), trades: path.join(DIR, 'trades.jsonl'), signals: path.join(DIR, 'signals.jsonl'), shadow: path.join(DIR, 'shadow.jsonl') };
 

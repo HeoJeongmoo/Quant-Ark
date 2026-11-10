@@ -6,6 +6,9 @@ import { LOGO_SVG } from './logo';
 import { EXIT_PROFILES } from './strategy/candidates';
 import { fmtTok, fmtUsd } from './tokens';
 import { clockText, usd, pct } from './format';
+import Planner from './planner/Planner';
+import Study from './study/Study';
+import { usePlannerStore } from './planner/store';
 
 // 퀀트 오피스 대시보드
 // 매매는 서버의 봇(server/bot)이 한다. 이 화면은 봇 상태와 이벤트를 보여 주고 설정·직접 주문만 보낸다.
@@ -53,6 +56,14 @@ async function api(path, { method = 'GET', body, ms = 8000, retried = false } = 
     const tok = getToken();
     if (tok) headers['x-api-token'] = tok;
     const r = await fetch(KIS_API + path, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: ac.signal });
+    if (r.status === 401) {
+      const j = await r.clone().json().catch(() => ({}));
+      if (j.login) {
+        // 로그인이 풀렸으면(공개 서버) 로그인 화면으로
+        window.location.reload();
+        throw new Error('로그인이 필요해요');
+      }
+    }
     if (r.status === 401 && !retried) {
       const v = window.prompt('봇 서버 접근 토큰(LOCAL_API_TOKEN) 입력 · 이 브라우저에만 저장');
       if (v) {
@@ -64,7 +75,11 @@ async function api(path, { method = 'GET', body, ms = 8000, retried = false } = 
         return api(path, { method, body, ms, retried: true });
       }
     }
-    const d = await r.json().catch(() => ({}));
+    // 응답이 중간에 끊기거나 JSON이 아니면 빈 값으로 넘기지 않고 오류로 처리 (화면은 직전 상태 유지)
+    const d = await r.json().catch(() => {
+      if (r.ok) throw new Error('응답이 중간에 끊김');
+      return {};
+    });
     if (!r.ok || d.ok === false) throw new Error(d.error || `HTTP ${r.status}`);
     return d;
   } finally {
@@ -105,7 +120,7 @@ const tsText = (iso) => (iso ? new Date(iso).toLocaleTimeString('ko-KR', { hour:
 // 봇 상태 → 화면용 묶음 (값을 만들지 않고 모양만 바꾼다)
 function viewOf(st, equity) {
   if (!st) return { tickers: [], stier: {}, pf: { cash: null, pos: {}, equity: [], start: null }, account: null, ark: 'unknown', arkReason: '봇 미연결', moses: {}, focus: [], orders: [] };
-  const tickers = st.tickers.map((t) => ({
+  const tickers = (st.tickers || []).map((t) => ({
     code: t.symbol,
     name: t.symbol,
     kr: t.kr,
@@ -129,7 +144,7 @@ function viewOf(st, equity) {
   for (const h of st.account?.holdings || []) if (h.qty > 0) pos[h.symbol] = { qty: h.qty, avg: h.avgPrice, price: h.price, sellable: h.sellableQty };
   return {
     tickers,
-    stier: Object.fromEntries(st.tickers.map((t) => [t.symbol, t.stier])),
+    stier: Object.fromEntries((st.tickers || []).map((t) => [t.symbol, t.stier])),
     pf: { cash: st.account?.cash?.deposit ?? null, pos, equity, start: equity[0] ?? null },
     account: st.account,
     ark: st.ark?.state || 'unknown',
@@ -147,6 +162,32 @@ function viewOf(st, equity) {
 }
 
 let msgId = 0;
+// 패널 하나가 오류로 멈춰도 화면 전체가 꺼지지 않게: 그 패널만 오류 내용으로 바꿔 보여줌
+export class Safe extends React.Component {
+  constructor(p) {
+    super(p);
+    this.state = { err: null };
+  }
+  static getDerivedStateFromError(err) {
+    return { err };
+  }
+  componentDidCatch(err, info) {
+    console.error(`[화면 오류] ${this.props.name}`, err, info?.componentStack);
+  }
+  render() {
+    if (!this.state.err) return this.props.children;
+    const e = this.state.err;
+    return (
+      <section className="win safe-err" role="alert">
+        <h2 className="win-title">화면 오류 · {this.props.name}</h2>
+        <p className="wl-msg">이 패널만 멈춤 · 봇은 계속 동작 · 아래 내용을 캡처해서 보내 주세요</p>
+        <pre>{String(e?.message || e)}{'\n'}{String(e?.stack || '').split('\n').slice(0, 6).join('\n')}</pre>
+        <button type="button" onClick={() => this.setState({ err: null })}>다시 그리기</button>
+      </section>
+    );
+  }
+}
+
 export default function App() {
   const officeRef = useRef(null);
   const [st, setSt] = useState(null); // 봇 상태
@@ -172,6 +213,17 @@ export default function App() {
       /* 저장 불가 브라우저 */
     }
   };
+  const [appView, setAppView0] = useState(() => (['planner', 'study'].includes(savedUi('qo-view', 'office')) ? savedUi('qo-view', 'office') : 'office'));
+  const setAppView = (v) => {
+    setAppView0(v);
+    keepUi('qo-view', v);
+    window.scrollTo(0, 0);
+  };
+  const { data: plannerData } = usePlannerStore(api);
+  const roomEquip = plannerData.room?.equip;
+  useEffect(() => {
+    officeRef.current && officeRef.current.setDecor && officeRef.current.setDecor(roomEquip);
+  }, [roomEquip, appView]);
   const setRightTab = (v) => (setRightTab0(v), keepUi('qo-right-tab', v));
   const setOfficeOpen = (v) => (setOfficeOpen0(v), keepUi('qo-office-open', v ? '1' : '0'));
   const [wlMsg, setWlMsg] = useState(null);
@@ -200,7 +252,7 @@ export default function App() {
     const o = officeRef.current;
     if (!o) return;
     o.setSchedule(dutyFor(mode), 'lounge');
-  }, [mode]);
+  }, [mode, appView]);
   useEffect(() => {
     const o = officeRef.current;
     if (!o) return;
@@ -210,12 +262,17 @@ export default function App() {
     if (night) DEPTS.forEach((d) => !AGENTS.some((a) => a.dept === d.id && a.duty[mode]) && dark.add(d.id));
     o.setEnv({ phase, night, dark });
     o.setManual(control === 'manual');
-  }, [Math.floor(clock.min), mode, control]);
+  }, [Math.floor(clock.min), mode, control, appView]);
 
   // ---------- 봇 상태 폴링 ----------
+  const busyRef = useRef(false);
   const refresh = useCallback(async () => {
+    // 이전 요청이 아직 안 끝났거나(느린 데이터망) 화면이 안 보이면 건너뜀 → 요청이 쌓이지 않게
+    if (busyRef.current || document.hidden) return;
+    busyRef.current = true;
     try {
-      const d = await api('/api/bot/state', { ms: 5000 });
+      const d = await api('/api/bot/state', { ms: 12000 });
+      if (!Array.isArray(d.tickers)) throw new Error('상태 응답 불완전');
       setSt(d);
       setConn('online');
       const total = d.account?.totals?.total;
@@ -226,6 +283,8 @@ export default function App() {
       }
     } catch {
       setConn((c) => (c === 'online' ? 'offline' : c === 'connecting' ? 'offline' : c));
+    } finally {
+      busyRef.current = false;
     }
   }, []);
   useEffect(() => {
@@ -386,17 +445,16 @@ export default function App() {
   const working = (m.orders || []).filter((o) => o.status === 'working');
   const tickAge = st?.lastTick ? Math.round((Date.now() - st.lastTick) / 1000) : null;
 
-  return (
-    <div className="app">
+  const header = (
       <header className="topbar">
         <div className="brand">
           <img src={LOGO_SVG} alt="퀀트 오피스 로고" className="brand-icon" />
           <div>
             <h1>퀀트 오피스</h1>
-            <p>KIS 실데이터로만 움직이는 8인 에이전트 매매 데스크</p>
+            <p>{appView === 'planner' ? '공부 · 일 플래너' : appView === 'study' ? '암기 카드 · 오피스 꾸미기' : 'KIS 실데이터로만 움직이는 8인 에이전트 매매 데스크'}</p>
           </div>
         </div>
-        <ControlToggle control={control} onChange={toggleControl} disabled={conn !== 'online'} />
+        <ViewSwitch view={appView} onChange={setAppView} />
         <div className="top-stats">
           <div className="clock">
             <span className={`led-dot ${mode === 'open' && !closedDay ? '' : 'idle'}`} />
@@ -415,36 +473,53 @@ export default function App() {
           )}
         </div>
       </header>
+  );
+  if (appView === 'planner') return <Safe name="플래너"><Planner api={api} header={header} /></Safe>;
+  if (appView === 'study') return <Safe name="공부방"><Study api={api} header={header} /></Safe>;
 
-      <Scheduler mode={mode} clock={clock.min} weekend={closedDay} officeRef={officeRef} onPick={setOpenAgent} />
+  return (
+    <div className="app">
+      {header}
 
-      <StatusStrip st={st} m={m} conn={conn} working={working} onArk={() => setOpenAgent('na')} />
+      <Safe name="Scheduler"><Scheduler mode={mode} clock={clock.min} weekend={closedDay} officeRef={officeRef} onPick={setOpenAgent} /></Safe>
+
+      <Safe name="StatusStrip"><StatusStrip st={st} m={m} conn={conn} working={working} onArk={() => setOpenAgent('na')} /></Safe>
 
       <main className="left">
         <div className="office-fold">
           <button type="button" className="fold-btn" onClick={() => setOfficeOpen(!officeOpen)} aria-expanded={officeOpen}>{officeOpen ? '▲ 오피스 화면 접기' : '▼ 오피스 화면 펼치기'}</button>
           <div style={{ display: officeOpen ? undefined : 'none' }}>
-            <OfficePanel officeRef={officeRef} bubbles={bubbles} setBubbles={setBubbles} onPick={setOpenAgent} market={m} mode={mode} control={control} emergency={st?.emergency} offline={conn !== 'online'} shutdown={st?.guard?.shutdown ? st.guard.reason : null} />
+            <Safe name="OfficePanel"><OfficePanel officeRef={officeRef} bubbles={bubbles} setBubbles={setBubbles} onPick={setOpenAgent} market={m} mode={mode} control={control} emergency={st?.emergency} offline={conn !== 'online'} shutdown={st?.guard?.shutdown ? st.guard.reason : null} /></Safe>
           </div>
         </div>
-        <ChartPanel sel={sel} live={conn === 'online'} />
+        <Safe name="ChartPanel"><ChartPanel sel={sel} live={conn === 'online'} /></Safe>
         <div className="feed-pair">
-          <Messenger messages={messages} avatars={avatars} onPick={setOpenAgent} offline={conn !== 'online'} />
-          <NewsFeed live={conn === 'online'} mine={m.tickers.map((t) => t.code)} onSelect={setTicker} />
+          <Safe name="Messenger"><Messenger messages={messages} avatars={avatars} onPick={setOpenAgent} offline={conn !== 'online'} /></Safe>
+          <Safe name="NewsFeed"><NewsFeed live={conn === 'online'} mine={m.tickers.map((t) => t.code)} onSelect={setTicker} /></Safe>
         </div>
       </main>
 
       <aside className="right">
-        {conn !== 'online' && <OfflineCard conn={conn} />}
+        {conn !== 'online' && <Safe name="OfflineCard"><OfflineCard conn={conn} /></Safe>}
         <div className="right-tabs" role="tablist" aria-label="오른쪽 패널">
           {[['trade', '매매'], ['perf', '성과'], ['shadow', '가상'], ['config', '설정']].map(([k, l]) => (
             <button key={k} type="button" role="tab" aria-selected={rightTab === k} className={rightTab === k ? 'on' : ''} onClick={() => setRightTab(k)}>{l}</button>
           ))}
         </div>
         <div className="tab-pane" style={{ display: rightTab === 'config' ? undefined : 'none' }}>
+        <section className="win ctl-win">
+          <h2 className="win-title">매매 제어</h2>
+          <Safe name="ControlToggle"><ControlToggle control={control} onChange={toggleControl} disabled={conn !== 'online'} /></Safe>
+          {window.location.protocol === 'https:' && (
+            <button type="button" className="logout-btn" onClick={() => fetch('/api/logout', { method: 'POST' }).finally(() => window.location.reload())}>
+              로그아웃
+            </button>
+          )}
+          <p className="ctl-note dim">{control === 'manual' ? '수동: 아래 전략·오버라이드 값이 최우선' : '자동: 봇이 판단 · AI는 막거나 줄이기만 함'}</p>
+        </section>
         {conn === 'online' &&
           (control === 'manual' ? (
-            <OverridePanel applied={st.settings.rules} onApply={applyRules} onLiquidate={requestLiquidate} mode={mode} hasPos={Object.keys(m.pf.pos).length > 0} market={m} onOrder={userOrder} />
+            <Safe name="OverridePanel"><OverridePanel applied={st.settings.rules} onApply={applyRules} onLiquidate={requestLiquidate} mode={mode} hasPos={Object.keys(m.pf.pos).length > 0} market={m} onOrder={userOrder} dd={st.drawdown} onDd={(a) => (a !== 'release' && a !== 'reset') || window.confirm(a === 'release' ? '누적 손실 정지를 풀고 2단계(비중 ¼, D만)부터 다시 시작할까요?' : '오늘 평가금액을 새 고점으로 잡을까요? (입출금한 날에만)') ? setSettings({ ddAction: a }) : null} /></Safe>
           ) : (
             <button className="ovr-locked" onClick={() => toggleControl('manual')}>
               <span className="lock" aria-hidden="true">🔒</span>
@@ -454,7 +529,7 @@ export default function App() {
               </span>
             </button>
           ))}
-        <TokenMonitor live={conn === 'online'} llm={st?.llm} onPick={setOpenAgent} avatars={avatars} />
+        <Safe name="TokenMonitor"><TokenMonitor live={conn === 'online'} llm={st?.llm} onPick={setOpenAgent} avatars={avatars} /></Safe>
         </div>
 
         <div className="tab-pane" style={{ display: rightTab === 'trade' ? undefined : 'none' }}>
@@ -479,7 +554,7 @@ export default function App() {
                 </div>
               </div>
               <p className="pf-formula">= 외화 예수금 <b>{usd(acct.cash.deposit)}</b> + 보유 주식 <b>{usd(acct.totals.stocks)}</b></p>
-              {m.pf.equity.length > 1 ? <EquityChart data={m.pf.equity} base={m.pf.equity[0]} /> : <p className="wl-empty">평가금액 추이: 화면을 연 뒤부터 기록</p>}
+              {m.pf.equity.length > 1 ? <Safe name="EquityChart"><EquityChart data={m.pf.equity} base={m.pf.equity[0]} /></Safe> : <p className="wl-empty">평가금액 추이: 화면을 연 뒤부터 기록</p>}
               <dl className="kv">
                 <div><dt>외화 예수금</dt><dd>{usd(acct.cash.deposit)}</dd></div>
                 <div><dt>평가손익</dt><dd style={{ color: tone(stockPnl) }}>{stockPnl > 0 ? '+' : ''}{usd(stockPnl)}</dd></div>
@@ -488,7 +563,7 @@ export default function App() {
               <p className={`acct-sync ${st.accountError ? 'err' : ''}`}>{st.accountError ? `⚠️ 갱신 실패, ${tsText(acct.fetchedAt)} 데이터 표시 중` : `KIS 계좌 ${tsText(acct.fetchedAt)} 갱신`}</p>
             </>
           )}
-          {st?.guard && <GuardBox g={st.guard} />}
+          {st?.guard && <Safe name="GuardBox"><GuardBox g={st.guard} /></Safe>}
           {working.length > 0 && (
             <ul className="orders">
               {working.map((o) => (
@@ -536,7 +611,7 @@ export default function App() {
 
         <section className="win">
           <h2 className="win-title">관심 종목 <span className="dim">수동 {manualList.filter((x) => x.list === 'manual').length}/{MAX_WATCH} · AI {aiList.length}/{MAX_AI}</span></h2>
-          <DavidSwitch on={davidOn} info={st?.discover} mode={mode} disabled={conn !== 'online'} onToggle={toggleDavid} />
+          <Safe name="DavidSwitch"><DavidSwitch on={davidOn} info={st?.discover} mode={mode} disabled={conn !== 'online'} onToggle={toggleDavid} /></Safe>
           <div className="wl-tabs" role="tablist" aria-label="관심 종목 구분">
             <button type="button" role="tab" aria-selected={wlTab === 'manual'} className={wlTab === 'manual' ? 'on' : ''} onClick={() => setWlTab('manual')}>
               수동 관심종목 <b>{manualList.length}</b>
@@ -549,9 +624,9 @@ export default function App() {
             </button>
           </div>
           {wlTab === 'manual' ? (
-            <WatchlistTools live={conn === 'online'} busy={wlBusy} msg={wlMsg} onAdd={addSymbol} />
+            <Safe name="WatchlistTools"><WatchlistTools live={conn === 'online'} busy={wlBusy} msg={wlMsg} onAdd={addSymbol} /></Safe>
           ) : wlTab === 'gap' ? (
-            <GapInfo gap={st?.gap} rules={m.rules} disabled={conn !== 'online'} onScan={runGapScan} msg={wlMsg} news={st?.news} />
+            <Safe name="GapInfo"><GapInfo gap={st?.gap} rules={m.rules} disabled={conn !== 'online'} onScan={runGapScan} msg={wlMsg} news={st?.news} /></Safe>
           ) : (
             <>
               <p className="wl-msg">{davidOn ? '다윗이 KIS 순위로 발굴한 관망 종목 · ↑수동으로 옮기기 가능' : '탐색 꺼짐 · 이 목록은 스캔·시세 갱신 제외'}</p>
@@ -606,30 +681,30 @@ export default function App() {
 
         <section className="win">
           <h2 className="win-title">S티어 스캐너 <span className="dim">D·승격된 전략 신호만 매수 (점선 = 가상 거래만)</span></h2>
-          <STierPanel market={m} mode={mode} onSelect={setTicker} davidOn={davidOn} />
+          <Safe name="STierPanel"><STierPanel market={m} mode={mode} onSelect={setTicker} davidOn={davidOn} /></Safe>
         </section>
 
 
         </div>
 
         <div className="tab-pane" style={{ display: rightTab === 'perf' ? undefined : 'none' }}>
-        <PnlCalendar live={conn === 'online'} env={st?.env} />
-        <TradeHistory stats={stats} onSelect={setTicker} />
-        <StatsPanel stats={stats} env={st?.env} health={m.health} modes={m.strategyModes} promo={st?.promo} rules={m.rules} onMode={(id, v) => setSettings({ strategyModes: { [id]: v } })} />
+        <Safe name="PnlCalendar"><PnlCalendar live={conn === 'online'} env={st?.env} /></Safe>
+        <Safe name="TradeHistory"><TradeHistory stats={stats} onSelect={setTicker} /></Safe>
+        <Safe name="StatsPanel"><StatsPanel stats={stats} env={st?.env} health={m.health} modes={m.strategyModes} promo={st?.promo} rules={m.rules} onMode={(id, v) => setSettings({ strategyModes: { [id]: v } })} /></Safe>
         </div>
 
         <div className="tab-pane" style={{ display: rightTab === 'shadow' ? undefined : 'none' }}>
-        <ShadowSummary shadows={st?.shadows} promo={st?.promo} rules={{ ...m.rules, promoteMin: st?.promoBar?.minTrades ?? m.rules?.promoteMin }} regime={st?.regime} />
-        <ShadowCalendar live={conn === 'online'} />
+        <Safe name="ShadowSummary"><ShadowSummary shadows={st?.shadows} promo={st?.promo} rules={{ ...m.rules, promoteMin: st?.promoBar?.minTrades ?? m.rules?.promoteMin }} regime={st?.regime} /></Safe>
+        <Safe name="ShadowCalendar"><ShadowCalendar live={conn === 'online'} /></Safe>
         <section className="win">
           <h2 className="win-title">전략 승격 <span className="dim">가상 성적 기준</span></h2>
-          <CandidatePanel promo={st?.promo} bar={st?.promoBar} registry={st?.registry} health={m.health} modes={m.strategyModes} rules={m.rules} onMode={(id, v) => setSettings({ strategyModes: { [id]: v } })} />
+          <Safe name="CandidatePanel"><CandidatePanel promo={st?.promo} bar={st?.promoBar} registry={st?.registry} health={m.health} modes={m.strategyModes} rules={m.rules} onMode={(id, v) => setSettings({ strategyModes: { [id]: v } })} /></Safe>
         </section>
-        <ShadowLog data={st?.shadows} uni={st?.shadowUni} rules={m.rules} onSettings={setSettings} onSelect={setTicker} />
+        <Safe name="ShadowLog"><ShadowLog data={st?.shadows} uni={st?.shadowUni} rules={m.rules} onSettings={setSettings} onSelect={setTicker} /></Safe>
         </div>
       </aside>
 
-      {openAgent && <AgentModal id={openAgent} onClose={() => setOpenAgent(null)} officeRef={officeRef} avatars={avatars} messages={messages} reports={reportsRef.current} moses={m.moses} />}
+      {openAgent && <Safe name="AgentModal"><AgentModal id={openAgent} onClose={() => setOpenAgent(null)} officeRef={officeRef} avatars={avatars} messages={messages} reports={reportsRef.current} moses={m.moses} /></Safe>}
     </div>
   );
 }
@@ -647,7 +722,7 @@ function StatusStrip({ st, m, conn, working, onArk }) {
       <div className="ss-item"><span>총 평가</span><b>{a ? usd(a.totals.total) : '-'}</b></div>
       <div className="ss-item"><span>예수금</span><b>{a ? usd(a.cash.deposit) : '-'}</b></div>
       <div className="ss-item"><span>오늘 손익</span><b style={{ color: tone(pnl) }}>{pnl == null ? '-' : `${pnl > 0 ? '+' : ''}${pnl.toFixed(2)}%`}</b><small>셧다운 -{g.limitPct ?? '-'}%</small></div>
-      <div className={`ss-item ${g.shutdown ? 'bad' : ''}`}><span>보호 잠금</span><b>{g.shutdown ? '⛔ 셧다운' : '정상'}</b><small>보유 {g.positions ?? 0}/{g.maxPositions ?? '-'}</small></div>
+      <div className={`ss-item ${g.shutdown || st.drawdown?.level >= 2 ? 'bad' : st.drawdown?.level === 1 ? 'warn' : ''}`}><span>보호 잠금</span><b>{g.shutdown ? '⛔ 셧다운' : st.drawdown?.level ? `누적 ${st.drawdown.name}` : '정상'}</b><small>보유 {g.positions ?? 0}/{st.drawdown?.maxPos != null ? Math.min(st.drawdown.maxPos, g.maxPositions ?? 99) : g.maxPositions ?? '-'}{st.drawdown?.ddPct != null ? ` · 고점 ${st.drawdown.ddPct}%` : ''}</small></div>
       <button type="button" className={`ss-item ark-${ark}`} onClick={onArk}><span>방주 (QQQ)</span><b>{ark === 'open' ? '열림' : ark === 'closed' ? '닫힘' : '대기'}</b><small style={{ color: tone(m.index?.changePct) }}>{m.index?.changePct != null ? `${m.index.changePct > 0 ? '+' : ''}${m.index.changePct.toFixed(2)}%` : '-'}</small></button>
       <div className="ss-item"><span>진행 중 주문</span><b>{working.length}건</b>{working[0] && <small>{working[0].side === 'buy' ? '매수' : '매도'} {working[0].symbol}</small>}</div>
       {st.emergency && <div className="ss-item bad"><span>비상</span><b>KIS {st.emergency}</b></div>}
@@ -911,15 +986,51 @@ function CandidatePanel({ promo, health, modes, rules, onMode, bar, registry }) 
   const H = open ? health?.[open] : null;
   return (
     <div className="strat-sw cand">
-      <h3 className="cand-h"><span className="dim">D 외 전략은 가상 성적이 조건을 넘어야 실매수<span className="cand-mob"> · 눌러서 자세히</span></span></h3>
-      <p className="wl-msg">조건: 가상 {minT}건↑ · 기대값 +{minE}%↑ · PF {bar?.minPF ?? R.promotePF ?? 1.3}↑ · 거래일 {minD}일↑ · 앞뒤 절반 플러스{bar?.extra ? ` (후보 ${bar.active}개 → 기준 상향)` : ''} · 장세 하나에서만 통과하면 그 장세 한정</p>
-      {registry && (
-        <p className="wl-msg cand-reg">
-          대기열 {registry.queued.length ? registry.queued.map((id) => `${id} ${nm(id)}`).join(' · ') : '없음'}
-          {' · '}은퇴 {registry.retired.length ? registry.retired.map((r) => <span key={r.id} title={`${r.retiredAt} ${r.reason}`}>{r.id} {nm(r.id)} </span>) : '없음'}
-          <br />은퇴: 100건·30일↑인데 기대값 −0.1%↓ · 60일에 40건 미만 · 90일 동안 승격 못 함 → 결번, 대기열 순서로 투입
+      <div className="rule-box">
+        <p className="rule-lead">D 외 전략은 아래 조건을 모두 넘어야 실매수<span className="cand-mob"> · 줄을 누르면 자세히</span></p>
+        <div className="rule-row">
+          <b className="rule-k">승격 조건</b>
+          <div className="rule-chips">
+            <span>가상 {minT}건↑</span>
+            <span>기대값 +{minE}%↑</span>
+            <span>PF {bar?.minPF ?? R.promotePF ?? 1.3}↑</span>
+            <span>거래일 {minD}일↑</span>
+            <span>앞뒤 절반 +</span>
+          </div>
+        </div>
+        <p className="rule-note">
+          {bar?.extra ? `후보 ${bar.active}개라 기준 상향 · ` : ''}장세 하나에서만 통과하면 그 장세일 때만 매수
         </p>
-      )}
+        <div className="rule-row">
+          <b className="rule-k">은퇴 조건</b>
+          <div className="rule-chips warn">
+            <span>{R.retireMin ?? 100}건·{R.retireDays ?? 30}일↑ & 기대값 {R.retireExp ?? -0.1}%↓</span>
+            <span>{R.retireSparseDays ?? 60}일에 40건 미만</span>
+            <span>{R.retireStaleDays ?? 90}일 승격 못 함</span>
+          </div>
+        </div>
+        <p className="rule-note">은퇴하면 알파벳 결번 · 대기열 순서대로 빈자리 투입</p>
+        {registry && (
+          <>
+            <div className="rule-row">
+              <b className="rule-k">대기열</b>
+              <ol className="rule-queue">
+                {registry.queued.length ? registry.queued.map((id) => (
+                  <li key={id}><b>{id}</b> {registry.names?.[id] || nm(id)}</li>
+                )) : <li className="dim">없음</li>}
+              </ol>
+            </div>
+            <div className="rule-row">
+              <b className="rule-k">결번</b>
+              <div className="rule-chips off">
+                {registry.retired.length ? registry.retired.map((r) => (
+                  <span key={r.id} title={`${r.retiredAt} ${r.reason}`}>{r.id} {registry.names?.[r.id] || nm(r.id)}</span>
+                )) : <span className="none">없음</span>}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
       <table className="stats cand-pc cand-grid">
         <thead><tr><th>전략</th><th>상태</th><th>청산</th><th>건수</th><th>거래일</th><th>승률</th><th>기대값</th><th>PF</th><th>실거래</th><th>모드</th></tr></thead>
         <tbody>
@@ -1113,6 +1224,24 @@ function WatchlistTools({ live, busy, msg, onAdd }) {
       </form>
       <p className="wl-msg dim">KIS로 거래소 확인 후 저장 · 보유 종목은 자동 감시</p>
       {msg && <p key={msg.key} className={`wl-msg ${msg.kind}`} role="status">{msg.text}</p>}
+    </div>
+  );
+}
+
+const VIEWS = [
+  ['office', '📈', '트레이딩'],
+  ['planner', '📅', '플래너'],
+  ['study', '🃏', '공부방'],
+];
+function ViewSwitch({ view, onChange }) {
+  return (
+    <div className="viewsw" role="tablist" aria-label="화면 전환">
+      {VIEWS.map(([k, ic, label]) => (
+        <button key={k} type="button" role="tab" aria-selected={view === k} className={view === k ? 'on' : ''} onClick={() => onChange(k)}>
+          <span className="ic" aria-hidden="true">{ic}</span>
+          {label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -2316,7 +2445,7 @@ function Stepper({ label, value, onChange, step, min, max, fmt, color }) {
   );
 }
 
-function OverridePanel({ applied, onApply, onLiquidate, mode, hasPos, market, onOrder }) {
+function OverridePanel({ applied, onApply, onLiquidate, mode, hasPos, market, onOrder, dd, onDd }) {
   const [draft, setDraft] = useState(applied);
   const [confirm, setConfirm] = useState(false);
   useEffect(() => setDraft(applied), [JSON.stringify(applied)]);
@@ -2447,6 +2576,24 @@ function OverridePanel({ applied, onApply, onLiquidate, mode, hasPos, market, on
             <small>끄면 신규 매수만 중지 · 보유 종목은 모세가 계속 관리</small>
           </span>
         </label>
+        <h3>누적 손실 방어 <span className="dim">최근 {draft.ddLookbackDays ?? 20}거래일 고점 대비</span></h3>
+        {dd && (
+          <p className={`dd-now lv${dd.level || 0}`}>
+            지금 <b>{dd.name}</b> · 고점 {dd.peak != null ? `$${dd.peak}` : '-'} 대비 <b style={{ color: tone(dd.ddPct) }}>{dd.ddPct != null ? `${dd.ddPct}%` : '-'}</b>
+            {dd.level > 0 && dd.level < 3 && ` · 비중 ×${dd.weight} · 동시 보유 ${dd.maxPos}종목${dd.level === 2 ? ' · D만' : ''}`}
+          </p>
+        )}
+        <div className="grid2">
+          <Stepper label="1단계 방어 (비중 ½)" value={draft.dd1Pct ?? 8} onChange={up('dd1Pct')} step={1} min={1} max={50} fmt={(v) => `-${v}%`} color={DOWN} />
+          <Stepper label="2단계 최소 (¼ · D만)" value={draft.dd2Pct ?? 12} onChange={up('dd2Pct')} step={1} min={2} max={60} fmt={(v) => `-${v}%`} color={DOWN} />
+          <Stepper label="3단계 정지" value={draft.dd3Pct ?? 15} onChange={up('dd3Pct')} step={1} min={3} max={80} fmt={(v) => `-${v}%`} color={DOWN} />
+          <Stepper label="고점 찾는 기간" value={draft.ddLookbackDays ?? 20} onChange={up('ddLookbackDays')} step={5} min={3} max={120} fmt={(v) => `${v}일`} />
+        </div>
+        <div className="dd-btns">
+          {dd?.level === 3 && <button type="button" className="danger" onClick={() => onDd('release')}>정지 풀기 (2단계부터)</button>}
+          <button type="button" onClick={() => onDd('reset')}>고점 다시 잡기</button>
+        </div>
+        <p className="wl-msg">악화되면 바로 단계 상승 · 그 단계 기준의 절반 위로 회복하면 하루 한 단계씩 완화 · 정지는 직접 풀기 · 입출금한 날엔 고점 다시 잡기</p>
       </div>
 
       <div className="ovr-group">

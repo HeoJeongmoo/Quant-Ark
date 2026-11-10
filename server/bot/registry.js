@@ -3,11 +3,14 @@
 //   은퇴하면 그 알파벳은 다시 쓰지 않고, 대기열 맨 앞 전략이 빈자리에 들어온다.
 import fs from 'node:fs';
 import path from 'node:path';
-import { STRATEGY_ORDER } from '../../src/strategy/candidates.js';
+import { STRATEGY_ORDER, QUEUE_ORDER, CANDIDATES } from '../../src/strategy/candidates.js';
+import { STRATEGIES } from '../../src/strategy/sTier.js';
 
 const FILE = path.resolve(process.env.BOT_REGISTRY_FILE || 'data/strategy-registry.json');
 export const DEFAULT_SLOTS = 10;
-const QUEUED_AT_START = ['L', 'M', 'N'];
+const QUEUED_AT_START = ['L', 'M', 'N', 'O', 'P', 'Q'];
+// 대기열 순서: QUEUE_ORDER를 따르고, 거기 없는 대기 전략은 알파벳 순으로 뒤에
+const queueRank = (id) => (QUEUE_ORDER.includes(id) ? QUEUE_ORDER.indexOf(id) : 100 + STRATEGY_ORDER.indexOf(id));
 
 export function createRegistry({ today }) {
   let R;
@@ -31,7 +34,10 @@ export function createRegistry({ today }) {
       /* 무시 */
     }
   };
-  const byStatus = (st) => STRATEGY_ORDER.filter((id) => R.s[id]?.status === st);
+  const byStatus = (st) => {
+    const ids = STRATEGY_ORDER.filter((id) => R.s[id]?.status === st);
+    return st === 'queued' ? ids.sort((a, b) => queueRank(a) - queueRank(b)) : ids;
+  };
   // 빈자리 채우기
   const fill = () => {
     const added = [];
@@ -49,7 +55,7 @@ export function createRegistry({ today }) {
     queued: () => byStatus('queued'),
     retired: () => byStatus('retired').map((id) => ({ id, ...R.s[id] })),
     since: (id) => R.s[id]?.since || null,
-    view: () => ({ slots: R.slots, active: byStatus('active'), queued: byStatus('queued'), retired: byStatus('retired').map((id) => ({ id, ...R.s[id] })) }),
+    view: () => ({ slots: R.slots, active: byStatus('active'), queued: byStatus('queued'), retired: byStatus('retired').map((id) => ({ id, ...R.s[id] })), names: Object.fromEntries(STRATEGY_ORDER.map((id) => [id, (CANDIDATES[id] || STRATEGIES[id])?.name || id])) }),
     /** 은퇴 → 결번. 대기열 맨 앞이 들어온 목록을 돌려줌 */
     retire(id, reason) {
       if (R.s[id]?.status !== 'active') return [];

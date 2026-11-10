@@ -271,6 +271,20 @@ ok(C.checkM(M).fired, '후보 M 홀리 그레일: ADX 30↑ 추세 중 20 EMA �
   ok(C.checkN(N2).fired, '후보 N DTFX: 구조 전환 후 50~70% 되돌림 재상승 → 신호', C.checkN(N2).detail || C.checkN(N2).reason);
 }
 
+  // O: QQQ 마이너스인데 +1%↑ 종목이 당일 고가 거래량 돌파
+  const O = Array.from({ length: 10 }, (_, i) => B(10.1 + i * 0.01, 10.2 + i * 0.01, 10.05 + i * 0.01, 10.15 + i * 0.01, 1000, i));
+  O.push(B(10.25, 10.45, 10.24, 10.42, 2500, 10));
+  ok(C.checkO(O, 10, { qqqChg: -1.2 }).fired, '후보 O 상대강도: QQQ −1.2%인데 +4% 종목이 당일 고가 돌파 → 신호', C.checkO(O, 10, { qqqChg: -1.2 }).detail);
+  ok(!C.checkO(O, 10, { qqqChg: 0.5 }).fired, '후보 O: QQQ 플러스인 날은 신호 없음', '');
+  // P: 오전 내내 VWAP 위 → 10:30 이후 첫 VWAP 눌림 → 반등
+  const P = Array.from({ length: 13 }, (_, i) => B(10 + i * 0.05, 10.08 + i * 0.05, 9.98 + i * 0.05, 10.05 + i * 0.05, 1000, i));
+  const vwP = C.sessionVwap(P);
+  P.push(B(10.6, 10.62, vwP * 0.9995, vwP * 1.002, 800, 13));
+  P.push(B(vwP * 1.002, 10.7, vwP, 10.68, 1200, 14));
+  ok(C.checkP(P).fired, '후보 P VWAP 첫 눌림: 오전 내내 위 → 10:40 첫 눌림 반등 → 신호', C.checkP(P).detail || C.checkP(P).reason);
+  // Q: 첫 15분 고가 돌파 → 첫 리테스트 지지 → 재상승
+  const Q = [B(10, 10.2, 9.95, 10.1, 1000, 0), B(10.1, 10.3, 10.05, 10.2, 1000, 1), B(10.2, 10.3, 10.1, 10.25, 1000, 2), B(10.25, 10.5, 10.24, 10.45, 1500, 3), B(10.45, 10.6, 10.4, 10.55, 1200, 4), B(10.55, 10.56, 10.31, 10.35, 900, 5), B(10.35, 10.62, 10.33, 10.6, 1300, 6)];
+  ok(C.checkQ(Q).fired, '후보 Q ORB 리테스트: 15분 고가 $10.3 돌파 → 첫 리테스트 지지 → 신호', C.checkQ(Q).detail || C.checkQ(Q).reason);
   // 은퇴 판정 · 장세 한정 승격
   const { evaluateRetirements, evaluatePromotions: evP } = await import('../server/bot/promotion.js');
   const day = (i) => new Date(Date.UTC(2026, 6, 1 + (i % 40), 15)).toISOString();
@@ -291,12 +305,48 @@ ok(C.checkM(M).fired, '후보 M 홀리 그레일: ADX 30↑ 추세 중 20 EMA �
   process.env.BOT_REGISTRY_FILE = path.join(tmp, 'registry.json');
   const { createRegistry } = await import('../server/bot/registry.js');
   const reg = createRegistry({ today: () => '2026-11-05' });
-  ok(reg.active().length === 10 && reg.queued().join('') === 'LMN', '명부: 후보 10자리 (A~K, D 제외) · 대기열 L·M·N', reg.active().join('') + ' / ' + reg.queued().join(''));
+  ok(reg.active().length === 10 && reg.queued().join('') === 'OPLQMN', '명부: 후보 10자리 (A~K, D 제외) · 대기열 O·P·L·Q·M·N (추천 순서)', reg.active().join('') + ' / ' + reg.queued().join(''));
   const added = reg.retire('H', '테스트');
-  ok(added.join('') === 'L' && !reg.active().includes('H') && reg.retired()[0].id === 'H', '명부: H 은퇴 → 결번, L 투입', added.join(''));
+  ok(added.join('') === 'O' && !reg.active().includes('H') && reg.retired()[0].id === 'H', '명부: H 은퇴 → 결번, 대기열 맨 앞 O 투입', added.join(''));
   const reg2 = createRegistry({ today: () => '2026-11-06' });
-  ok(reg2.retired().some((r) => r.id === 'H') && reg2.active().includes('L'), '명부: 재시작해도 은퇴·투입 유지', reg2.active().join(''));
+  ok(reg2.retired().some((r) => r.id === 'H') && reg2.active().includes('O'), '명부: 재시작해도 은퇴·투입 유지', reg2.active().join(''));
 }
+
+{
+  const D = await import('../server/bot/drawdown.js');
+  const days = { '2026-11-02': { last: 213 }, '2026-11-03': { last: 205 }, '2026-11-04': { last: 200 } };
+  let st = { level: 0 };
+  let r = D.evaluateDrawdown(st, { ymd: '2026-11-05', total: 195, days });
+  ok(r.s.level === 1 && r.s.peak === 213, '누적 손실: 고점 $213 대비 −8.5% → 1단계 방어', JSON.stringify(r.s));
+  r = D.evaluateDrawdown(r.s, { ymd: '2026-11-05', total: 180, days });
+  ok(r.s.level === 3, '누적 손실: −15.5% → 3단계 정지 (바로 올라감)', r.s.ddPct);
+  r = D.evaluateDrawdown(r.s, { ymd: '2026-11-06', total: 212, days });
+  ok(r.s.level === 3, '누적 손실: 3단계는 회복해도 자동으로 안 풀림', r.s.level);
+  st = D.releaseDrawdown(r.s, '2026-11-06');
+  ok(st.level === 2, '누적 손실: 정지 풀기 → 2단계(최소)부터', st.level);
+  r = D.evaluateDrawdown(st, { ymd: '2026-11-06', total: 210, days });
+  ok(r.s.level === 2, '누적 손실: 같은 날 두 번 내려오지 않음', r.s.level);
+  r = D.evaluateDrawdown(r.s, { ymd: '2026-11-07', total: 210, days });
+  ok(r.s.level === 1, '누적 손실: 다음 날 기준 절반(−6%) 위 회복 → 한 단계만 완화', `${r.s.level} ${r.s.ddPct}`);
+  st = D.resetPeak({ level: 1 }, '2026-11-08', 150);
+  r = D.evaluateDrawdown(st, { ymd: '2026-11-08', total: 150, days });
+  ok(r.s.level === 0 && r.s.peak === 150, '누적 손실: 고점 다시 잡기 (출금 후) → 기준 $150', JSON.stringify(r.s));
+}
+
+{
+  const { judgeShadow } = await import('../server/bot/shadowJudge.js');
+  const bar = (hm, o, h, l, c, day = '2026-11-04') => ({ time: `${day} ${hm}`, t: Date.parse(`${day}T${hm}:00-05:00`), o, h, l, c });
+  const x = { entry: 10, tpPct: 5, slPct: 2, holdBars: 48 };
+  const day = [bar('15:40', 10, 10.05, 9.95, 10), bar('15:45', 10, 10.1, 9.95, 10.05), bar('15:50', 10.05, 10.1, 10, 10.08), bar('15:55', 10.08, 10.15, 10.05, 10.1)];
+  const j1 = judgeShadow(x, day, { entryDay: '2026-11-04', closeAt: '16:00' });
+  ok(j1.kind === 'closed' && j1.why === '장 마감' && Math.abs(j1.exit - 10.08 * 0.999) < 1e-9, '가상 마감: 실제 봇처럼 15:55에 정리 (15:55 봉 시가)', JSON.stringify(j1));
+  const j2 = judgeShadow(x, [...day.slice(0, 3), bar('16:00', 10.08, 10.2, 9.0, 9.1), bar('09:30', 9, 9.1, 8.5, 8.6, '2026-11-05')], { entryDay: '2026-11-04', closeAt: '16:00' });
+  ok(j2.kind === 'closed' && j2.why === '장 마감' && Math.abs(j2.exit - 10.08 * 0.999) < 1e-9, '가상 마감: 마감 봉이 빠지고 시간외 급락이 와도 마지막 정규장 봉 종가로 (시간외로 손절 안 함)', JSON.stringify(j2));
+  const j3 = judgeShadow(x, [bar('12:45', 10, 10.05, 9.95, 10, '2026-11-27'), bar('12:50', 10, 10.05, 9.95, 10, '2026-11-27'), bar('12:55', 10, 10.05, 9.95, 10.02, '2026-11-27')], { entryDay: '2026-11-27', closeAt: '13:00' });
+  ok(j3.kind === 'closed' && j3.why === '장 마감', '가상 마감: 조기폐장일은 12:55 봉에서 정리', JSON.stringify(j3));
+  ok(judgeShadow(x, day.slice(0, 2), { entryDay: '2026-11-04' }).kind === 'open', '가상 마감: 아직 마감 봉 전이면 진행 중', '');
+}
+
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(fail ? `\n${fail}개 실패` : '\n모두 통과');

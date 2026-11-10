@@ -3,11 +3,15 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import * as journal from './bot/journal.js';
 import { createBot } from './bot/engine.js';
 import * as sTier from '../src/strategy/sTier.js';
 import * as watch from './watchlist.js';
 import * as usage from './usage.js';
+import * as planner from './planner.js';
+import * as auth from './auth.js';
+import { makeCards } from './study.js';
 import { createLlm } from './llm/index.js';
 import { maskKey, llmConfig } from './llm/config.js';
 let createKis, KisApiError, OrderRejected;
@@ -47,6 +51,8 @@ const ENDPOINTS = [
   'POST /api/bot/discover  다윗 탐색 즉시 1회',
   'GET  /api/bot/calendar?month=2026-11   날짜별 손익 캘린더',
   'GET  /api/bot/shadowcal?month=2026-11  날짜별 가상 거래 (전략·청산별)',
+  'GET  /api/planner · PUT /api/planner  공부·일 플래너 (data/planner.json)',
+  'POST /api/study/cards {text, n}  공부 내용 → 암기 카드 (AI)',
   'GET  /api/news?limit=60   뉴스 속보 (KIS + 종목별 야후·Alpha Vantage)',
   'POST /api/bot/gapscan   트랙 1 갭 스캔 즉시 1회 (?final=1 이면 오늘 후보 확정)',
   'GET  /api/bot/stats?env=demo   전략별 승률·손익비·PF',
@@ -78,15 +84,23 @@ const ENDPOINTS = [
 const isLocalOrigin = (o) => /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(o || '');
 let currentOrigin = ALLOW_ORIGIN;
 const send = (res, code, data) => {
-  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': currentOrigin, 'Access-Control-Allow-Headers': 'Content-Type, x-api-token', 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS' });
-  res.end(JSON.stringify(data));
+  const head = { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': currentOrigin, 'Access-Control-Allow-Headers': 'Content-Type, x-api-token', 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS', Vary: 'Accept-Encoding' };
+  let body = Buffer.from(JSON.stringify(data));
+  // 큰 응답(봇 상태 등)은 gzip으로 줄여 보냄 → 휴대폰 데이터망에서 받다가 끊기는 일을 줄임
+  if (res._gz && body.length > 2048) {
+    body = zlib.gzipSync(body, { level: 6 });
+    head['Content-Encoding'] = 'gzip';
+  }
+  head['Content-Length'] = body.length;
+  res.writeHead(code, head);
+  res.end(body);
 };
-const readJson = (req) =>
+const readJson = (req, max = 1e5) =>
   new Promise((resolve, reject) => {
     let s = '';
     req.on('data', (c) => {
       s += c;
-      if (s.length > 1e5) reject(new Error('요청 본문이 너무 큽니다.'));
+      if (s.length > max) reject(Object.assign(new Error('요청 본문이 너무 큽니다.'), { code: 413 }));
     });
     req.on('end', () => {
       try {
@@ -109,9 +123,37 @@ rt.on('error', (e) => console.warn(e.message));
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   currentOrigin = isLocalOrigin(req.headers.origin) ? req.headers.origin : ALLOW_ORIGIN;
+  res._gz = /\bgzip\b/.test(req.headers['accept-encoding'] || '');
   const q = Object.fromEntries(url.searchParams);
   try {
     if (req.method === 'OPTIONS') return send(res, 204, {});
+
+    // ---------- 인터넷 공개 시 로그인 ----------
+    if (auth.viaProxy(req) && !auth.enabled) {
+      // 비밀번호 없이 인터넷에 열리는 것을 막는다
+      res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
+      return res.end('APP_PASSWORD가 비어 있어 외부 접속을 막았습니다. .env에 APP_PASSWORD를 넣고 다시 시작하세요.');
+    }
+    if (auth.enabled) {
+      if (url.pathname === '/api/login' && req.method === 'POST') {
+        const b = await readJson(req, 2000).catch(() => ({}));
+        const r = auth.login(req, res, b.password);
+        return send(res, r.code, r.code === 200 ? { ok: true } : { ok: false, error: r.error });
+      }
+      if (url.pathname === '/api/logout' && req.method === 'POST') {
+        auth.logout(res);
+        return send(res, 200, { ok: true });
+      }
+      const local = !auth.viaProxy(req) && /^(::ffff:)?127\.0\.0\.1$|^::1$/.test(req.socket.remoteAddress || '');
+      if (auth.valid(req)) {
+        // 로그인한 사람은 LOCAL_API_TOKEN을 따로 묻지 않음
+        if (API_TOKEN) req.headers['x-api-token'] = API_TOKEN;
+      } else if (!(local && url.pathname === '/api/bot/health')) {
+        if (url.pathname.startsWith('/api/')) return send(res, 401, { ok: false, login: true, error: '로그인이 필요해요.' });
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' });
+        return res.end(auth.LOGIN_HTML);
+      }
+    }
 
     if (req.method === 'GET' && url.pathname === '/' && fs.existsSync(DIST)) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
@@ -247,6 +289,28 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/bot/shadowcal' && req.method === 'GET') {
       const month = /^\d{4}-\d{2}$/.test(q.month || '') ? q.month : new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()).slice(0, 7);
       return send(res, 200, { ok: true, ...bot.shadowCalendar(month) });
+    }
+    if (url.pathname === '/api/planner' && req.method === 'GET') return send(res, 200, { ok: true, ...planner.load() });
+    if (url.pathname === '/api/planner' && req.method === 'PUT') {
+      if (API_TOKEN && req.headers['x-api-token'] !== API_TOKEN) return send(res, 401, { ok: false, error: 'x-api-token이 올바르지 않습니다.' });
+      try {
+        const b = await readJson(req, planner.MAX_BYTES);
+        return send(res, 200, { ok: true, ...planner.save(b.data, b.base === null ? undefined : b.base) });
+      } catch (e) {
+        return send(res, e.code || 500, { ok: false, error: e.message });
+      }
+    }
+    if (url.pathname === '/api/study/cards' && req.method === 'POST') {
+      if (API_TOKEN && req.headers['x-api-token'] !== API_TOKEN) return send(res, 401, { ok: false, error: 'x-api-token이 올바르지 않습니다.' });
+      try {
+        const b = await readJson(req, 3e4);
+        const r = await makeCards(b.text, b.n);
+        console.log(`[공부방] 카드 ${r.cards.length}장 → ${r.provider}/${r.model}`);
+        return send(res, 200, { ok: true, ...r });
+      } catch (e) {
+        const code = e.code || e.status || { budget: 429, nokey: 503, disabled: 503, exhausted: 502 }[e.kind] || 500;
+        return send(res, code, { ok: false, error: e.message });
+      }
     }
     if (url.pathname === '/api/news' && req.method === 'GET') return send(res, 200, { ok: true, ...bot.news(Math.min(200, Math.max(1, Number(q.limit) || 60))) });
     if (url.pathname === '/api/bot/stats' && req.method === 'GET') return send(res, 200, { ok: true, ...journal.stats({ env: q.env || kis.config.env, since: q.since }), kellyFeedback: journal.kellyFeedback(q.env || kis.config.env) });

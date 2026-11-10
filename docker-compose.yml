@@ -28,3 +28,23 @@ services:
       options:
         max-size: "10m"
         max-file: "5"
+
+  # ---------- 인터넷 공개용 (클라우드 서버에서만) ----------
+  # .env에 COMPOSE_PROFILES=public, PUBLIC_HOST=34-12-56-78.sslip.io, APP_PASSWORD=... 를 넣으면 같이 켜짐
+  # 자동 HTTPS(Let's Encrypt) → https://PUBLIC_HOST 로 접속. 내 PC에서는 프로필이 없어서 켜지지 않음
+  caddy:
+    image: caddy:2-alpine
+    container_name: quant-caddy
+    profiles: ["public"]
+    restart: always
+    network_mode: host # 80/443을 받아서 127.0.0.1:8787(봇)로 넘김
+    command: caddy reverse-proxy --from ${PUBLIC_HOST:-localhost} --to 127.0.0.1:8787
+    volumes:
+      - ./data/caddy:/data # 인증서 보관
+    depends_on:
+      - quant-office
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"

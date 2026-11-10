@@ -28,6 +28,9 @@ const save = (force = false) => {
   }
 };
 
+/** 날짜별 평가금액 전체 (누적 손실 방어용) */
+export const allDays = () => load();
+
 export function record(ymd, total, at = new Date().toISOString()) {
   if (!(total > 0) || !ymd) return;
   const d = load();

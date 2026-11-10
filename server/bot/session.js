@@ -13,6 +13,8 @@ const EARLY_CLOSE = new Set(['2026-11-27', '2026-12-24', '2027-11-26', ...(proce
 // 테스트용: BOT_TIME_OFFSET_MS 로 봇 시계를 옮길 수 있다 (실사용 시 비워 둘 것)
 const OFFSET = Number(process.env.BOT_TIME_OFFSET_MS || 0);
 export const clockNow = () => Date.now() + OFFSET;
+/** 그날 정규장 마감 시각 'HH:MM' (조기폐장 13:00) */
+export const closeHHMM = (ymd) => (EARLY_CLOSE.has(ymd) ? '13:00' : '16:00');
 
 const FMT = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', weekday: 'short', timeZoneName: 'short' });
 

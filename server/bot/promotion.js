@@ -9,7 +9,7 @@ import { EXIT_PROFILES } from '../../src/strategy/candidates.js';
 import { ALL_STRATEGIES } from '../../src/strategy/sTier.js';
 
 // 승격 대상: D(트랙 1, 기본 활성)를 뺀 전부 (실제로는 명부의 후보 자리 전략만 평가)
-export const PROMOTABLE = ['A', 'B', 'C', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N'];
+export const PROMOTABLE = ['A', 'B', 'C', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q'];
 export const DIRS = ['강세', '보합', '약세'];
 // 예전 A·B·C 가상 거래(청산 규칙 표시 없음)는 당시 목표·손절이 같은 청산 규칙으로 센다
 const profileOf = (t) => t.profile || Object.values(EXIT_PROFILES).find((p) => p.tpPct === t.tpPct && p.slPct === t.slPct)?.id || null;
